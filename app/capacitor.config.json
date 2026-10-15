@@ -1,0 +1,23 @@
+{
+  "appId": "kz.avaland.app",
+  "appName": "AVALAND",
+  "webDir": "www",
+  "backgroundColor": "#0a1b29",
+  "ios": {
+    "contentInset": "never",
+    "backgroundColor": "#0a1b29",
+    "scrollEnabled": true,
+    "limitsNavigationsToAppBoundDomains": true
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 0,
+      "launchAutoHide": false,
+      "backgroundColor": "#0a1b29",
+      "showSpinner": false
+    },
+    "LocalNotifications": {
+      "iconColor": "#e2b04a"
+    }
+  }
+}

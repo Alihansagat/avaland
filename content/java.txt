@@ -1,0 +1,511 @@
+@lang id=java name=Java land=Джаваленд color=#b8673f
+@about Строгая типизация и JVM. Банки, корпоративные системы, бэкенд на Spring, Android.
+@project REST-сервис библиотеки на Spring Boot
+Бэкенд для учёта книг и выдачи читателям.
+- Сущности Book, Reader, Loan с JPA и PostgreSQL
+- CRUD-эндпоинты и выдача/возврат книги с проверкой бизнес-правил
+- Валидация запросов (@Valid) и единый обработчик ошибок (@ControllerAdvice)
+- Слои controller → service → repository, DTO вместо сущностей в ответах
+- Юнит-тесты на JUnit 5 и Mockito для сервисов
+- Сборка через Maven или Gradle, Dockerfile и README
+
+@lesson Синтаксис, типы и main
+Программа на Java состоит из классов. Точка входа — `public static void main(String[] args)`. Код компилируется в байт-код и выполняется на JVM, поэтому работает на любой ОС.
+Примитивные типы: `int`, `long`, `double`, `boolean`, `char` и другие. У каждого примитива есть класс-обёртка (`Integer`, `Double`), а `String` — объект.
+Целочисленное деление отбрасывает дробную часть. Переполнение `int` не вызывает ошибку, а молча «перекручивает» значение. Начиная с Java 10 тип локальной переменной можно вывести через `var`.
+```code
+public class Main {
+    public static void main(String[] args) {
+        int a = 7, b = 2;
+        System.out.println(a / b);        // 3
+        System.out.println(a / (double) b); // 3.5
+        long big = Integer.MAX_VALUE + 1L;
+        int overflow = Integer.MAX_VALUE + 1; // -2147483648
+        var name = "Ада";                   // String
+        System.out.printf("%s: %d%n", name, a);
+    }
+}
+```
+! Для больших чисел используйте long, а для денег — BigDecimal
+! `char` — одиночные кавычки, `String` — двойные
+! var работает только для локальных переменных с инициализацией
+? out Что выведет код?
+```code
+System.out.println(7 / 2 + 7 % 2);
+```
+> 4
+= 7 / 2 = 3, 7 % 2 = 1.
+? mc Что произойдёт при `Integer.MAX_VALUE + 1` в типе int?
+- ArithmeticException
++ Значение станет отрицательным (переполнение)
+- Тип автоматически станет long
+- Ошибка компиляции
+= Java не проверяет переполнение int.
+? fill Впишите тип для целого числа больше 2 миллиардов.
+```code
+___ population = 8_000_000_000L;
+```
+> long
+= Суффикс L обозначает литерал long.
+? out Что выведет код?
+```code
+System.out.println(1 + 2 + "3" + 4 + 5);
+```
+> 3345
+= Сначала 1 + 2 = 3, затем всё склеивается как строки.
+
+@lesson Условия, циклы и switch
+`if`/`else`, `for`, `while` и `do-while` работают как в C. Цикл for-each `for (String s : list)` перебирает массивы и коллекции.
+Современный `switch` со стрелками не проваливается в следующий case и может возвращать значение. Тернарный оператор `cond ? a : b` удобен для коротких выборов.
+Строки сравнивают через `equals()`: `==` сравнивает ссылки, и две одинаковые по тексту строки могут оказаться разными объектами.
+```code
+int[] scores = {90, 45, 77};
+for (int s : scores) {
+    String grade = s >= 80 ? "A" : s >= 60 ? "B" : "C";
+    System.out.println(s + " → " + grade);
+}
+
+String day = "SAT";
+int hours = switch (day) {
+    case "SAT", "SUN" -> 0;
+    case "FRI" -> 6;
+    default -> 8;
+};
+
+String a = new String("hi");
+System.out.println(a == "hi");      // false
+System.out.println(a.equals("hi")); // true
+```
+! Сравнение строк только через equals
+! Старый switch с двоеточием проваливается без break
+! `"текст".equals(x)` безопасен, даже если x — null
+? out Что выведет код?
+```code
+int s = 0;
+for (int i = 0; i < 10; i += 3) s += i;
+System.out.println(s);
+```
+> 18
+= 0 + 3 + 6 + 9.
+? out Что выведет код?
+```code
+int x = 2;
+switch (x) {
+    case 1: System.out.print("A");
+    case 2: System.out.print("B");
+    case 3: System.out.print("C");
+}
+```
+> BC
+= Без break выполнение проваливается дальше.
+? mc Как правильно сравнить строки по содержимому?
+- a == b
++ a.equals(b)
+- a.compareTo(b) == true
+- a === b
+= == сравнивает ссылки.
+? fill Впишите синтаксис ветки нового switch, которая не проваливается.
+```code
+case "SAT" ___ 0;
+```
+> ->
+= Стрелочный case выполняет только свою ветку.
+
+@lesson ООП: классы, инкапсуляция, наследование
+Класс описывает состояние (поля) и поведение (методы). Поля делают `private`, а доступ дают через методы — это инкапсуляция: объект сам следит за корректностью своих данных.
+`extends` наследует класс, `@Override` помечает переопределённый метод, `super` обращается к родителю. Java поддерживает одиночное наследование классов.
+Полиморфизм: переменная типа родителя может хранить объект наследника, и вызов метода выполнит версию наследника. Для неизменяемых моделей данных удобны `record`.
+```code
+public abstract class Shape {
+    public abstract double area();
+}
+
+public class Circle extends Shape {
+    private final double r;
+    public Circle(double r) {
+        if (r <= 0) throw new IllegalArgumentException("r > 0");
+        this.r = r;
+    }
+    @Override
+    public double area() { return Math.PI * r * r; }
+}
+
+public record Point(int x, int y) {}
+
+Shape s = new Circle(2);
+System.out.println(s.area());              // 12.56...
+System.out.println(new Point(1, 2));       // Point[x=1, y=2]
+```
+! @Override защищает от опечатки в имени метода
+! record сам создаёт конструктор, геттеры, equals, hashCode и toString
+! Валидируйте данные в конструкторе — объект не должен быть «сломанным»
+? mc Сколько классов может наследовать класс в Java напрямую?
++ Один
+- Два
+- Сколько угодно
+- Ни одного
+= Множественное наследование есть только у интерфейсов.
+? mc Что такое полиморфизм?
+- Наличие нескольких конструкторов
++ Вызов метода выполняет версию реального класса объекта
+- Приватные поля
+- Статические методы
+= Shape s = new Circle(); s.area() вызовет Circle.area().
+? fill Впишите тип, который сам генерирует equals, hashCode и toString.
+```code
+public ___ User(String name, int age) {}
+```
+> record
+= Записи появились в Java 16.
+? out Что выведет код?
+```code
+class A { String who() { return "A"; } }
+class B extends A { String who() { return "B"; } }
+A obj = new B();
+System.out.println(obj.who());
+```
+> B
+= Вызывается метод реального класса объекта.
+
+@lesson Интерфейсы и абстракции
+Интерфейс — контракт: список методов, которые класс обязуется реализовать. Класс может реализовать много интерфейсов через `implements`.
+В интерфейсах бывают `default`-методы с реализацией. Интерфейс с одним абстрактным методом называют функциональным: его можно передать лямбдой.
+Код зависит от интерфейсов, а не от конкретных классов. Так реализацию легко подменить, например на заглушку в тестах.
+```code
+public interface Notifier {
+    void send(String to, String text);
+    default void sendAll(List<String> to, String text) {
+        to.forEach(t -> send(t, text));
+    }
+}
+
+public class EmailNotifier implements Notifier {
+    public void send(String to, String text) { /* SMTP */ }
+}
+
+public class OrderService {
+    private final Notifier notifier;
+    public OrderService(Notifier notifier) { this.notifier = notifier; }
+}
+
+Comparator<String> byLen = (a, b) -> a.length() - b.length();
+```
+! Передача зависимостей через конструктор — основа тестируемого кода
+! Comparator, Runnable, Function — функциональные интерфейсы
+! Абстрактный класс хранит состояние, интерфейс задаёт контракт
+? mc Сколько интерфейсов может реализовать класс?
+- Один
+- Два
++ Сколько угодно
+- Ни одного, если есть extends
+= class A extends B implements C, D, E.
+? mc Что такое функциональный интерфейс?
++ Интерфейс с одним абстрактным методом
+- Интерфейс без методов
+- Интерфейс только со static методами
+- Любой интерфейс в java.util
+= Его реализацию можно записать лямбдой.
+? fill Впишите слово для метода с реализацией внутри интерфейса.
+```code
+___ void log(String s) { System.out.println(s); }
+```
+> default
+= default-методы появились в Java 8.
+? mc Зачем OrderService получает Notifier через конструктор?
+- Так быстрее
++ Чтобы зависеть от интерфейса и подменять реализацию, например в тестах
+- Так требует компилятор
+- Чтобы сделать поле публичным
+= Это внедрение зависимостей.
+
+@lesson Коллекции и generics
+`List` хранит элементы по порядку (`ArrayList`), `Set` — уникальные (`HashSet`), `Map` — пары ключ–значение (`HashMap`). Объявляйте переменную типом интерфейса: `List<String> list = new ArrayList<>()`.
+Generics задают тип элементов в угловых скобках и работают только с объектами: `List<Integer>`, а не `List<int>`. Автоупаковка превращает int в Integer автоматически.
+Объекты в `HashSet` и ключи `HashMap` должны правильно реализовывать `equals` и `hashCode` вместе. Изменять коллекцию во время перебора for-each нельзя — будет ConcurrentModificationException.
+```code
+List<String> langs = new ArrayList<>(List.of("Java", "Go"));
+langs.add("Kotlin");
+
+Map<String, Integer> count = new HashMap<>();
+for (String w : "a b a c a".split(" ")) {
+    count.merge(w, 1, Integer::sum);
+}
+System.out.println(count.get("a"));         // 3
+System.out.println(count.getOrDefault("z", 0)); // 0
+
+Set<Integer> uniq = new HashSet<>(List.of(1, 2, 2, 3));
+System.out.println(uniq.size());            // 3
+
+langs.removeIf(l -> l.startsWith("G"));     // безопасное удаление
+```
+! List.of создаёт неизменяемый список
+! Переопределили equals — переопределите и hashCode
+! Для удаления при переборе — removeIf или Iterator
+? out Что выведет код?
+```code
+List<Integer> list = new ArrayList<>(List.of(1, 2, 3));
+list.remove(Integer.valueOf(1));
+list.remove(0);
+System.out.println(list);
+```
+> [3]
+= Сначала удаляется значение 1, потом элемент с индексом 0 (это 2).
+? mc Что случится при `List.of(1, 2).add(3)`?
+- Список станет [1, 2, 3]
++ UnsupportedOperationException
+- Ошибка компиляции
+- Ничего
+= List.of возвращает неизменяемый список.
+? fill Впишите метод Map, который вернёт значение по умолчанию при отсутствии ключа.
+```code
+int n = map.___("key", 0);
+```
+> getOrDefault
+= get вернул бы null.
+? mc Что нужно переопределить вместе с equals для работы в HashMap?
++ hashCode
+- toString
+- compareTo
+- clone
+= Равные объекты обязаны иметь одинаковый hashCode.
+
+@lesson Исключения
+Проверяемые исключения (checked, например `IOException`) компилятор заставляет обработать или объявить через `throws`. Непроверяемые (`RuntimeException` и наследники) обычно сигнализируют об ошибке в коде.
+`try-with-resources` автоматически закрывает ресурсы (файлы, соединения), реализующие `AutoCloseable`. `finally` выполняется всегда.
+Не глотайте исключения пустым catch: залогируйте или пробросьте дальше с понятным сообщением. Свои исключения наследуют от `RuntimeException` или `Exception`.
+```code
+public class NotFoundException extends RuntimeException {
+    public NotFoundException(String msg) { super(msg); }
+}
+
+public Book find(long id) {
+    return repo.findById(id)
+        .orElseThrow(() -> new NotFoundException("Книга " + id + " не найдена"));
+}
+
+try (BufferedReader r = Files.newBufferedReader(Path.of("data.txt"))) {
+    System.out.println(r.readLine());
+} catch (IOException e) {
+    throw new UncheckedIOException("Не удалось прочитать файл", e);
+}
+```
+! Пустой catch прячет баги
+! Передавайте исходное исключение как cause
+! NullPointerException почти всегда говорит об ошибке в логике
+? mc Какое исключение компилятор требует обработать или объявить?
++ IOException
+- NullPointerException
+- IllegalArgumentException
+- ArithmeticException
+= IOException — проверяемое.
+? out Что выведет код?
+```code
+try {
+    System.out.print("A");
+    throw new RuntimeException();
+} catch (RuntimeException e) {
+    System.out.print("B");
+} finally {
+    System.out.print("C");
+}
+```
+> ABC
+= Исключение поймано, finally выполняется всегда.
+? fill Впишите конструкцию, которая сама закроет файл.
+```code
+___ (var in = new FileInputStream("a.txt")) { }
+```
+> try
+= try-with-resources закрывает AutoCloseable ресурсы.
+? mc Что не так с `catch (Exception e) {}`?
+- Ничего
++ Ошибка молча исчезает и баг невозможно найти
+- Код не скомпилируется
+- Исключение пробросится дальше
+= Минимум — логировать.
+
+@lesson Stream API и Optional
+Stream описывает обработку коллекции цепочкой: `filter` отбирает, `map` преобразует, `sorted` сортирует, `collect` собирает результат. Поток ленивый: ничего не выполняется до терминальной операции.
+`Collectors.groupingBy` группирует элементы, `Collectors.toMap` строит словарь, `joining` склеивает строки. Поток одноразовый — повторно его не использовать.
+`Optional` явно говорит «значения может не быть» и заставляет обработать этот случай через `orElse`, `orElseThrow`, `map`. Не возвращайте null там, где подходит Optional.
+```code
+record Order(String customer, double total, boolean paid) {}
+
+List<Order> orders = List.of(
+    new Order("Ада", 120, true),
+    new Order("Алан", 80, false),
+    new Order("Ада", 200, true));
+
+double revenue = orders.stream()
+    .filter(Order::paid)
+    .mapToDouble(Order::total)
+    .sum();                                   // 320.0
+
+Map<String, Long> byCustomer = orders.stream()
+    .collect(Collectors.groupingBy(Order::customer, Collectors.counting()));
+
+Optional<Order> big = orders.stream().filter(o -> o.total() > 150).findFirst();
+System.out.println(big.map(Order::customer).orElse("нет")); // Ада
+```
+! Без терминальной операции стрим ничего не делает
+! `Optional.get()` без проверки — тот же NullPointerException
+! Ссылки на методы `Order::paid` короче лямбд
+? out Что выведет код?
+```code
+System.out.println(Stream.of(1, 2, 3, 4)
+    .filter(n -> n % 2 == 0)
+    .map(n -> n * n)
+    .toList());
+```
+> [4, 16]
+= Чётные 2 и 4 в квадрате.
+? mc Что вернёт findFirst()?
+- Элемент или null
++ Optional с элементом или пустой Optional
+- Список из одного элемента
+- Исключение, если пусто
+= Пустой поток даст Optional.empty().
+? fill Впишите коллектор для группировки.
+```code
+.collect(Collectors.___(User::city))
+```
+> groupingBy
+= Результат — Map<город, List<User>>.
+? mc Что случится при повторном использовании того же Stream?
++ IllegalStateException
+- Он пройдёт заново
+- Вернёт пустой результат
+- Ошибка компиляции
+= Поток можно пройти только один раз.
+
+@lesson Многопоточность и основы JVM
+Поток (`Thread`) выполняет код параллельно. Создавать потоки вручную редко нужно: используют пулы `ExecutorService` и `CompletableFuture`. В Java 21 появились виртуальные потоки для тысяч одновременных задач.
+Если несколько потоков меняют общие данные, возможна гонка. Защищаются через `synchronized`, атомарные классы (`AtomicInteger`) и потокобезопасные коллекции (`ConcurrentHashMap`).
+Память JVM делится на стек (локальные переменные и вызовы) и кучу (объекты). Сборщик мусора сам удаляет объекты без ссылок, но утечки памяти всё равно возможны, если ссылки остаются, например в статических коллекциях.
+```code
+AtomicInteger counter = new AtomicInteger();
+try (ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor()) {
+    for (int i = 0; i < 1000; i++) {
+        pool.submit(counter::incrementAndGet);
+    }
+}
+System.out.println(counter.get());     // 1000
+
+CompletableFuture<String> user = CompletableFuture.supplyAsync(() -> loadUser());
+CompletableFuture<String> stats = CompletableFuture.supplyAsync(() -> loadStats());
+String page = user.thenCombine(stats, (u, s) -> u + s).join();
+```
+! `count++` не атомарен: при гонке часть увеличений потеряется
+! ConcurrentHashMap вместо HashMap для общих данных
+! Объекты в куче, ссылки на них и примитивы методов — в стеке
+? mc Почему `count++` из разных потоков даёт неверный результат?
+- Java не поддерживает потоки
++ Это три операции (прочитать, прибавить, записать), они перемешиваются
+- int слишком мал
+- Нужно использовать long
+= Используйте AtomicInteger или синхронизацию.
+? mc Где хранятся объекты, созданные через new?
+- В стеке
++ В куче
+- В байт-коде
+- В регистре
+= Сборщик мусора управляет кучей.
+? fill Впишите класс атомарного счётчика.
+```code
+___ hits = new AtomicInteger();
+```
+> AtomicInteger
+= Методы incrementAndGet и getAndIncrement атомарны.
+? mc Какую коллекцию выбрать для словаря, который меняют разные потоки?
+- HashMap
+- TreeMap
++ ConcurrentHashMap
+- LinkedHashMap
+= Она рассчитана на конкурентный доступ.
+
+@exam
+? out Что выведет код?
+```code
+Integer a = 127, b = 127, c = 128, d = 128;
+System.out.println((a == b) + " " + (c == d));
+```
+> true false
+= Integer кэширует значения от -128 до 127, сравнение через == сравнивает ссылки.
+? out Что выведет код?
+```code
+String s = "java";
+s.toUpperCase();
+System.out.println(s);
+```
+> java
+= Строки неизменяемы, результат toUpperCase не сохранён.
+? out Что выведет код?
+```code
+System.out.println(0.1 + 0.2 == 0.3);
+```
+> false
+= Двоичная плавающая точка неточна.
+? out Что выведет код?
+```code
+int[] arr = {1, 2, 3};
+int[] copy = arr;
+copy[0] = 9;
+System.out.println(arr[0]);
+```
+> 9
+= Массив — объект, обе переменные ссылаются на него.
+? out Что выведет код?
+```code
+static int f() {
+    try { return 1; }
+    finally { System.out.print("F"); }
+}
+// в main:
+System.out.println(f());
+```
+> F1
+= finally выполняется перед фактическим возвратом.
+? mc Что будет, если поле в HashSet-объекте изменили после добавления, и оно влияет на hashCode?
+- Ничего
++ contains может не найти объект
+- Исключение
+- Объект удалится
+= Объект лежит в «корзине» по старому хэшу.
+? mc Какая сложность get в HashMap в среднем?
++ O(1)
+- O(log n)
+- O(n)
+- O(n²)
+= При хорошем хэшировании.
+? mc Что выведет `List.of(1, null)`?
+- [1, null]
++ NullPointerException
+- [1]
+- Ошибку компиляции
+= List.of не допускает null.
+? fill Впишите модификатор, который запрещает наследование класса.
+```code
+public ___ class Money { }
+```
+> final
+= String тоже final.
+? mc Чем `ArrayList` отличается от `LinkedList` при доступе по индексу?
++ ArrayList — O(1), LinkedList — O(n)
+- Оба O(1)
+- ArrayList — O(n), LinkedList — O(1)
+- Оба O(log n)
+= ArrayList хранит элементы в массиве.
+? out Что выведет код?
+```code
+var map = new TreeMap<String, Integer>();
+map.put("b", 2); map.put("a", 1); map.put("c", 3);
+System.out.println(map.firstKey() + map.lastKey());
+```
+> ac
+= TreeMap хранит ключи отсортированными.
+? mc Что делает `@Transactional` в Spring?
+- Кэширует метод
++ Выполняет метод в транзакции БД и откатывает при RuntimeException
+- Делает метод асинхронным
+- Логирует вызовы
+= По умолчанию откат на непроверяемых исключениях.

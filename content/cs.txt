@@ -1,0 +1,518 @@
+@lang id=cs name=C# land=Королевство C# color=#8b5fb0
+@about Язык платформы .NET. Корпоративный бэкенд, десктоп, игры на Unity.
+@project Web API бронирования на ASP.NET Core
+Сервис бронирования переговорных комнат.
+- Сущности Room, Booking, User на Entity Framework Core с PostgreSQL
+- Проверка пересечения бронирований по времени в сервисном слое
+- Аутентификация через JWT, роли пользователь и администратор
+- Валидация через FluentValidation или DataAnnotations
+- Тесты на xUnit, включая интеграционные с WebApplicationFactory
+- Swagger-документация, Dockerfile, README
+
+@lesson Типы, переменные и строки
+C# строго типизирован. Значимые типы (`int`, `double`, `bool`, `struct`) хранят значение, ссылочные (`string`, классы, массивы) — ссылку на объект.
+`var` выводит тип при компиляции — переменная не становится динамической. Интерполяция строк: `$"Привет, {name}"`. Строки неизменяемы; для сборки в цикле используйте `StringBuilder`.
+Включённые nullable reference types (`<Nullable>enable`) отличают `string` от `string?` и предупреждают о возможном null.
+```csharp
+int count = 5;
+var price = 9.99m;            // decimal — для денег
+string name = "Ада";
+string? nickname = null;
+
+Console.WriteLine($"{name}: {count * price:F2}");
+Console.WriteLine(nickname ?? "без ника");
+Console.WriteLine(7 / 2);     // 3
+Console.WriteLine(7 / 2.0);   // 3.5
+
+var sb = new StringBuilder();
+for (int i = 0; i < 3; i++) sb.Append(i);
+Console.WriteLine(sb.ToString()); // 012
+```
+! decimal (суффикс m) — для денег, double — для научных расчётов
+! `??` подставляет значение для null, `?.` безопасно вызывает метод
+! Строки сравнивают через == — в C# это сравнение содержимого
+? mc Какой тип лучше для денежных сумм?
+- double
+- float
++ decimal
+- int всегда
+= decimal хранит десятичные дроби точно.
+? out Что выведет код?
+```csharp
+string a = "hi";
+string b = "h" + "i";
+Console.WriteLine(a == b);
+```
+> True
+= Для string оператор == сравнивает содержимое.
+? fill Впишите символ интерполяции строки.
+```csharp
+Console.WriteLine(___"Итого: {sum}");
+```
+> $
+= $ перед кавычками включает подстановки в {}.
+? mc Чем является var x = 10?
++ Переменной типа int, тип выведен при компиляции
+- Динамической переменной
+- object
+- Константой
+= Для динамики есть dynamic.
+
+@lesson Управляющие конструкции и pattern matching
+`if`, `for`, `while`, `foreach` знакомы по другим языкам. `foreach` перебирает любую коллекцию, реализующую `IEnumerable`.
+Switch-выражение возвращает значение и поддерживает шаблоны: по типу, по свойствам, по диапазонам. Это короче и надёжнее цепочки if-else.
+Оператор `is` проверяет тип и сразу объявляет переменную: `if (obj is string s)`.
+```csharp
+static string Grade(int score) => score switch
+{
+    >= 90 => "A",
+    >= 75 => "B",
+    >= 60 => "C",
+    _     => "F"
+};
+
+static decimal Discount(Customer c) => c switch
+{
+    { IsVip: true }               => 0.2m,
+    { Orders: > 10 }              => 0.1m,
+    _                             => 0m
+};
+
+object value = "text";
+if (value is string s && s.Length > 2)
+    Console.WriteLine(s.ToUpper());
+```
+! `_` в switch-выражении — ветка «всё остальное»
+! Шаблоны свойств `{ IsVip: true }` заменяют вложенные if
+! Без ветки `_` компилятор предупредит о необработанных значениях
+? out Что выведет код?
+```csharp
+int x = 7;
+var r = x switch { < 5 => "low", < 10 => "mid", _ => "high" };
+Console.WriteLine(r);
+```
+> mid
+= 7 не меньше 5, но меньше 10.
+? mc Что делает `if (o is int n)`?
++ Проверяет, что o — int, и объявляет n с его значением
+- Приводит o к int с исключением при ошибке
+- Сравнивает o с переменной n
+- Создаёт новую переменную n = 0
+= Это шаблон объявления.
+? fill Впишите символ ветки «по умолчанию» в switch-выражении.
+```csharp
+var t = code switch { 200 => "ok", ___ => "error" };
+```
+> _
+= Discard-шаблон совпадает с чем угодно.
+? out Что выведет код?
+```csharp
+var sum = 0;
+foreach (var n in new[] { 1, 2, 3, 4 })
+    if (n % 2 == 0) sum += n;
+Console.WriteLine(sum);
+```
+> 6
+= 2 + 4.
+
+@lesson Классы, свойства и record
+Свойства с `get` и `set` — основной способ дать доступ к данным. `init` разрешает задать значение только при создании объекта. Основной конструктор класса пишут прямо в заголовке.
+`record` — тип для неизменяемых данных: сравнение по значению, удобный `ToString` и выражение `with` для копии с изменениями.
+`struct` — значимый тип: копируется при присваивании. Подходит для маленьких объектов вроде координат.
+```csharp
+public class Player(string name)
+{
+    public string Name { get; } = name;
+    public int Level { get; private set; } = 1;
+    public void LevelUp() => Level++;
+}
+
+public record Money(decimal Amount, string Currency);
+
+var a = new Money(100, "KZT");
+var b = a with { Amount = 200 };
+Console.WriteLine(a == new Money(100, "KZT")); // True
+Console.WriteLine(b);  // Money { Amount = 200, Currency = KZT }
+```
+! record сравнивается по значениям полей, class — по ссылке
+! private set — читать могут все, менять только класс
+! with создаёт копию, исходный record не меняется
+? mc Как сравниваются два record с одинаковыми полями?
++ Равны по значению
+- Не равны, разные ссылки
+- Сравнение запрещено
+- Равны только если это один объект
+= Компилятор генерирует сравнение по полям.
+? fill Впишите выражение для копии record с изменённым полем.
+```csharp
+var updated = user ___ { Email = "new@mail.kz" };
+```
+> with
+= Исходный объект не меняется.
+? mc Что значит `{ get; init; }`?
+- Свойство только для чтения навсегда
++ Значение можно задать только при создании объекта
+- Свойство вычисляется лениво
+- Свойство статическое
+= Например, new User { Name = "Ада" }.
+? out Что выведет код?
+```csharp
+var p1 = new P { X = 1 };
+var p2 = p1;
+p2.X = 5;
+Console.WriteLine(p1.X);
+
+struct P { public int X; }
+```
+> 1
+= struct копируется при присваивании.
+
+@lesson Интерфейсы, наследование и DI
+Класс наследует один базовый класс и может реализовать много интерфейсов. Методы, которые можно переопределить, помечают `virtual`, а переопределение — `override`. `abstract` требует реализации в наследнике.
+Интерфейсы описывают контракт: `IRepository`, `IEmailSender`. Код зависит от интерфейсов — тогда реализацию легко заменить.
+ASP.NET Core имеет встроенный контейнер внедрения зависимостей. Сервисы регистрируют с временем жизни: `Singleton` — один на приложение, `Scoped` — один на HTTP-запрос, `Transient` — новый при каждом запросе.
+```csharp
+public interface IEmailSender
+{
+    Task SendAsync(string to, string body);
+}
+
+public class SmtpSender : IEmailSender
+{
+    public Task SendAsync(string to, string body) => Task.CompletedTask;
+}
+
+public class BookingService(IEmailSender email)
+{
+    public async Task ConfirmAsync(Booking b) =>
+        await email.SendAsync(b.UserEmail, "Бронь подтверждена");
+}
+
+// Program.cs
+builder.Services.AddScoped<IEmailSender, SmtpSender>();
+builder.Services.AddScoped<BookingService>();
+```
+! DbContext регистрируют как Scoped — один на запрос
+! Не внедряйте Scoped-сервис в Singleton
+! Без virtual метод нельзя переопределить
+? mc Какое время жизни у Scoped-сервиса в ASP.NET Core?
+- Один на всё приложение
++ Один на HTTP-запрос
+- Новый при каждом внедрении
+- Один на пользователя
+= Например, DbContext.
+? fill Впишите модификатор, который разрешает переопределить метод.
+```csharp
+public ___ decimal Price() => 100;
+```
+> virtual
+= В наследнике пишут override.
+? mc Почему BookingService принимает IEmailSender, а не SmtpSender?
++ Чтобы зависеть от контракта и подменять реализацию в тестах
+- Так быстрее работает
+- SmtpSender нельзя создать
+- Так требует C#
+= Это принцип инверсии зависимостей.
+? mc Сколько базовых классов может быть у класса в C#?
++ Один
+- Два
+- Неограниченно
+- Ноль
+= Интерфейсов — сколько угодно.
+
+@lesson Обобщения и исключения
+Обобщения (generics) делают код универсальным без потери типов: `List<T>`, `Result<T>`, `Repository<TEntity>`. Ограничения `where T : class, new()` задают требования к типу.
+Исключения обрабатывают через `try` / `catch` / `finally`. Ловите конкретные типы. Фильтр `catch (HttpRequestException e) when (e.StatusCode == ...)` уточняет условие. Повторный выброс — просто `throw;`, чтобы сохранить стек.
+Для ожидаемых ошибок (не найдено, неверный ввод) многие команды используют результат-объект вместо исключений: исключения дороги и нарушают поток кода.
+```csharp
+public record Result<T>(T? Value, string? Error)
+{
+    public bool Ok => Error is null;
+    public static Result<T> Success(T v) => new(v, null);
+    public static Result<T> Fail(string e) => new(default, e);
+}
+
+public class Repo<T> where T : class, IEntity
+{
+    private readonly Dictionary<int, T> _items = new();
+    public Result<T> Find(int id) =>
+        _items.TryGetValue(id, out var e) ? Result<T>.Success(e) : Result<T>.Fail("не найдено");
+}
+
+try
+{
+    await client.GetStringAsync(url);
+}
+catch (HttpRequestException e) when (e.StatusCode == HttpStatusCode.NotFound)
+{
+    logger.LogWarning("Нет ресурса {Url}", url);
+}
+catch (Exception)
+{
+    throw;   // сохраняет исходный стек
+}
+```
+! `throw;` сохраняет стек, `throw e;` его теряет
+! Не используйте исключения для обычного потока логики
+! Ограничения where делают generic-код безопаснее
+? mc Чем `throw;` лучше `throw e;` в блоке catch?
++ Сохраняет исходный стек вызовов
+- Работает быстрее
+- Ничем
+- Подавляет исключение
+= throw e; начинает стек заново.
+? fill Впишите ключевое слово ограничения generic-параметра.
+```csharp
+public class Cache<T> ___ T : class { }
+```
+> where
+= where T : class — только ссылочные типы.
+? mc Что делает `catch (Exception e) when (условие)`?
++ Ловит исключение только если условие истинно
+- Ловит все исключения всегда
+- Повторяет вызов
+- Логирует исключение
+= Это фильтр исключений.
+? out Что выведет код?
+```csharp
+static T Pick<T>(T a, T b, bool first) => first ? a : b;
+Console.WriteLine(Pick("x", "y", false) + Pick(1, 2, true));
+```
+> y1
+= string + int склеиваются в строку.
+
+@lesson Коллекции и LINQ
+`List<T>`, `Dictionary<TKey, TValue>`, `HashSet<T>` — основные коллекции. `IEnumerable<T>` — самый общий тип «то, что можно перебрать».
+LINQ — запросы к коллекциям: `Where`, `Select`, `OrderBy`, `GroupBy`, `First`, `Any`, `Sum`. Запрос ленивый: он выполняется при переборе или вызове `ToList()`, `Count()`.
+С Entity Framework тот же LINQ превращается в SQL. Важно не вызвать `ToList()` слишком рано, иначе фильтрация пойдёт в памяти, а не в базе.
+```csharp
+var orders = new List<Order>
+{
+    new("Ада", 120, true),
+    new("Алан", 80, false),
+    new("Ада", 200, true),
+};
+
+var revenue = orders.Where(o => o.Paid).Sum(o => o.Total);     // 320
+var byCustomer = orders
+    .GroupBy(o => o.Customer)
+    .Select(g => new { Name = g.Key, Total = g.Sum(o => o.Total) })
+    .OrderByDescending(x => x.Total)
+    .ToList();
+var hasBig = orders.Any(o => o.Total > 150);                     // true
+var first = orders.FirstOrDefault(o => o.Total > 999);           // null
+
+record Order(string Customer, decimal Total, bool Paid);
+```
+! First бросает исключение на пустой выборке, FirstOrDefault вернёт default
+! Ленивый запрос выполняется каждый раз при переборе
+! В EF фильтруйте до ToList()
+? out Что выведет код?
+```csharp
+var r = new[] { 5, 3, 8, 1 }.Where(n => n > 2).OrderBy(n => n);
+Console.WriteLine(string.Join(",", r));
+```
+> 3,5,8
+= Отбор больше 2, затем сортировка.
+? mc Когда выполняется LINQ-запрос без ToList()?
+- Сразу при объявлении
++ При переборе результата
+- Никогда
+- При компиляции
+= Это отложенное выполнение.
+? fill Впишите метод: есть ли хотя бы один элемент с условием.
+```csharp
+bool any = users.___(u => u.IsAdmin);
+```
+> Any
+= All проверяет условие для всех.
+? mc Что вернёт `FirstOrDefault` для пустой коллекции ссылочных объектов?
++ null
+- Исключение
+- Пустой объект
+- -1
+= default для ссылочного типа — null.
+
+@lesson async/await и Task
+`async` метод возвращает `Task` или `Task<T>`. `await` ждёт завершения задачи, не блокируя поток, — сервер в это время обслуживает другие запросы.
+Независимые операции запускайте вместе и ждите через `Task.WhenAll`. Не блокируйте асинхронный код через `.Result` или `.Wait()` — это ведёт к взаимоблокировкам и истощению пула потоков.
+`CancellationToken` позволяет отменить долгую операцию, например когда клиент закрыл соединение.
+```csharp
+public async Task<Dashboard> LoadAsync(int userId, CancellationToken ct)
+{
+    var userTask   = _users.GetAsync(userId, ct);
+    var ordersTask = _orders.GetRecentAsync(userId, ct);
+    await Task.WhenAll(userTask, ordersTask);
+    return new Dashboard(userTask.Result, ordersTask.Result);
+}
+
+// плохо:
+// var user = _users.GetAsync(id).Result;
+```
+! async void — только для обработчиков событий
+! .Result после await Task.WhenAll безопасен: задача уже завершена
+! Пробрасывайте CancellationToken во все async-вызовы
+? mc Почему опасно писать `.Result` у незавершённой задачи?
+- Это медленно компилируется
++ Блокирует поток и может вызвать взаимоблокировку
+- Возвращает null
+- Отменяет задачу
+= Используйте await.
+? fill Впишите метод, который ждёт завершения всех задач.
+```csharp
+await Task.___(t1, t2, t3);
+```
+> WhenAll
+= WhenAny ждёт первую завершившуюся.
+? mc Что возвращает `async Task<int> GetAsync()`?
+- int
++ Task<int>
+- void
+- ValueTask всегда
+= Результат получают через await.
+? mc Для чего CancellationToken?
++ Для отмены долгой операции
+- Для авторизации
+- Для логирования
+- Для повтора запроса
+= Например, при закрытии соединения клиентом.
+
+@lesson ASP.NET Core и Entity Framework
+ASP.NET Core строит веб-API. Minimal API описывает эндпоинты в Program.cs: `app.MapGet`, `app.MapPost`. Контроллеры подходят для больших проектов.
+Запрос проходит через конвейер middleware: логирование, обработка ошибок, аутентификация, маршрутизация. Порядок регистрации middleware важен.
+Entity Framework Core связывает классы с таблицами. `DbContext` — единица работы, `DbSet<T>` — таблица. Изменения схемы фиксируются миграциями: `dotnet ef migrations add` и `dotnet ef database update`.
+```csharp
+var builder = WebApplication.CreateBuilder(args);
+builder.Services.AddDbContext<AppDb>(o =>
+    o.UseNpgsql(builder.Configuration.GetConnectionString("Db")));
+var app = builder.Build();
+
+app.MapGet("/rooms", async (AppDb db) =>
+    await db.Rooms.AsNoTracking().ToListAsync());
+
+app.MapPost("/rooms", async (Room room, AppDb db) =>
+{
+    db.Rooms.Add(room);
+    await db.SaveChangesAsync();
+    return Results.Created($"/rooms/{room.Id}", room);
+});
+
+app.Run();
+
+public class AppDb(DbContextOptions<AppDb> o) : DbContext(o)
+{
+    public DbSet<Room> Rooms => Set<Room>();
+}
+```
+! Строку подключения держите в конфигурации, не в коде
+! AsNoTracking ускоряет запросы только для чтения
+! Без SaveChangesAsync изменения не попадут в базу
+? mc Что сохраняет изменения в базе в EF Core?
+- db.Rooms.Add
++ SaveChangesAsync()
+- ToListAsync()
+- Migrate()
+= Add только отмечает объект для вставки.
+? mc Что такое middleware?
++ Звено конвейера, через которое проходит каждый запрос
+- Таблица базы данных
+- Клиентская библиотека
+- Шаблон страницы
+= Например, аутентификация или обработка ошибок.
+? fill Впишите метод регистрации GET-эндпоинта в Minimal API.
+```csharp
+app.___("/health", () => "ok");
+```
+> MapGet
+= Для POST — MapPost.
+? mc Какой статус-код правильно вернуть после создания ресурса?
+- 200
++ 201
+- 204
+- 302
+= 201 Created с адресом нового ресурса.
+
+@exam
+? out Что выведет код?
+```csharp
+var list = new List<int> { 1, 2, 3 };
+var q = list.Where(x => x > 1);
+list.Add(4);
+Console.WriteLine(q.Count());
+```
+> 3
+= Запрос ленивый и выполнился уже после добавления 4.
+? out Что выведет код?
+```csharp
+string? s = null;
+Console.WriteLine(s?.Length ?? -1);
+```
+> -1
+= ?. дал null, ?? подставил -1.
+? out Что выведет код?
+```csharp
+int a = 5;
+int b = a++ + ++a;
+Console.WriteLine(b);
+```
+> 12
+= a++ вернёт 5 (a станет 6), затем ++a даст 7: 5 + 7.
+? mc Чем `IEnumerable` отличается от `IQueryable` в EF?
++ IQueryable превращает выражение в SQL, IEnumerable фильтрует в памяти
+- Ничем
+- IEnumerable быстрее всегда
+- IQueryable только для массивов
+= После AsEnumerable фильтрация идёт на стороне приложения.
+? out Что выведет код?
+```csharp
+var r1 = new R(1);
+var r2 = r1 with { };
+Console.WriteLine($"{r1 == r2} {ReferenceEquals(r1, r2)}");
+
+record R(int X);
+```
+> True False
+= with создаёт новый объект с теми же значениями.
+? mc Что такое boxing?
+- Шифрование значения
++ Упаковка значимого типа в object в куче
+- Приведение класса к интерфейсу
+- Сериализация в JSON
+= Лишний boxing создаёт нагрузку на сборщик мусора.
+? fill Впишите ключевое слово, которое гарантирует вызов Dispose.
+```csharp
+___ var file = File.OpenRead("a.txt");
+```
+> using
+= using вызывает Dispose при выходе из области.
+? out Что выведет код?
+```csharp
+var d = new Dictionary<string, int> { ["a"] = 1 };
+Console.WriteLine(d.TryGetValue("b", out var v) ? v : 0);
+```
+> 0
+= Ключа нет, TryGetValue вернул false.
+? mc Какая проблема у Singleton-сервиса, который получает DbContext?
++ DbContext переживёт запрос и будет использоваться конкурентно
+- Ничего страшного
+- Сервис станет Transient
+- Приложение не запустится никогда
+= В ASP.NET Core в разработке это ловит проверка областей.
+? mc Что делает `ConfigureAwait(false)` в библиотечном коде?
++ Не возвращается в исходный контекст синхронизации после await
+- Отключает await
+- Делает метод синхронным
+- Отменяет задачу
+= Важно для UI-приложений и старого ASP.NET.
+? out Что выведет код?
+```csharp
+Console.WriteLine(new[] { 1, 2, 3 }.Aggregate((a, b) => a * 10 + b));
+```
+> 123
+= (1·10+2)·10+3.
+? mc Какой HTTP-метод идемпотентен?
+- POST
++ PUT
+- PATCH всегда
+- CONNECT
+= Повторный PUT с тем же телом даёт тот же результат.

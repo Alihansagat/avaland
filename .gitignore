@@ -1,0 +1,6 @@
+node_modules/
+app/node_modules/
+app/ios/App/App/public/
+app/ios/App/build/
+.DS_Store
+__pycache__/

@@ -1,0 +1,543 @@
+@lang id=swift name=Swift land=Архипелаг Swift color=#d27b4b
+@about Язык Apple. Приложения для iPhone, iPad, Mac и Apple Watch.
+@project iOS-приложение «Дневник тренировок» на SwiftUI
+Приложение для записи тренировок и просмотра прогресса.
+- Экраны списка, добавления и детальной статистики с NavigationStack
+- Хранение через SwiftData
+- Графики прогресса через Swift Charts
+- Архитектура MVVM с @Observable моделями
+- Загрузка упражнений из публичного API через async/await и Codable
+- Юнит-тесты на XCTest или Swift Testing, скриншоты и видео в README
+
+@lesson Константы, переменные и опционалы
+`let` объявляет константу, `var` — переменную. Swift советует `let` везде, где значение не меняется. Тип выводится автоматически, но можно указать явно.
+Опционал `String?` хранит значение или `nil`. Достать значение безопасно можно через `if let`, `guard let` или подставить значение по умолчанию через `??`.
+Принудительное разворачивание `!` падает при nil — избегайте его. Интерполяция строк: `"Привет, \(name)"`.
+```swift
+let name = "Ада"
+var score = 0
+score += 10
+
+var nickname: String? = nil
+print(nickname ?? "Гость")             // Гость
+
+func greet(_ user: String?) {
+    guard let user else {
+        print("Нет пользователя")
+        return
+    }
+    print("Привет, \(user)")
+}
+
+if let age = Int("36") {
+    print(age + 1)                      // 37
+}
+```
+! guard let выходит из функции рано и оставляет основной код без вложенности
+! Int("abc") вернёт nil, а не 0
+! `!` только когда nil действительно невозможен
+? mc Что вернёт `Int("12a")`?
+- 12
+- 0
++ nil
+- Ошибку компиляции
+= Конвертация строки в число возвращает опционал.
+? out Что выведет код?
+```swift
+let a: Int? = nil
+let b: Int? = 5
+print((a ?? 1) + (b ?? 1))
+```
+> 6
+= 1 + 5.
+? fill Впишите конструкцию раннего выхода, если опционал пуст.
+```swift
+___ let token else { return }
+```
+> guard
+= После guard переменная доступна до конца функции.
+? mc Что произойдёт при `let x: Int? = nil; print(x!)`?
++ Аварийное завершение программы
+- Выведет nil
+- Выведет 0
+- Ошибка компиляции
+= Принудительное разворачивание nil — фатальная ошибка.
+
+@lesson Управление потоком и коллекции
+`for-in` перебирает диапазоны (`1...5` включительно, `1..<5` без последнего) и коллекции. `switch` должен быть исчерпывающим и не проваливается в следующий case.
+Коллекции: `Array`, `Set`, `Dictionary`. Они значимые типы: присваивание копирует (оптимизировано через copy-on-write).
+Функции высшего порядка: `map`, `filter`, `reduce`, `compactMap` (убирает nil), `sorted(by:)`.
+```swift
+for i in 1...3 { print(i) }
+
+let scores = ["Ада": 90, "Алан": 72]
+for (name, score) in scores.sorted(by: { $0.value > $1.value }) {
+    print(name, score)
+}
+
+let raw = ["1", "x", "3"]
+let numbers = raw.compactMap { Int($0) }            // [1, 3]
+let total = numbers.reduce(0, +)                    // 4
+
+let grade = switch total {
+    case 0..<3: "low"
+    case 3...10: "mid"
+    default: "high"
+}
+print(grade)                                        // mid
+```
+! Словарь не упорядочен — сортируйте перед выводом
+! compactMap удобно отбрасывает неудачные преобразования
+! Массив копируется при присваивании, в отличие от NSArray
+? out Что выведет код?
+```swift
+var a = [1, 2]
+var b = a
+b.append(3)
+print(a.count)
+```
+> 2
+= Массивы — значимые типы.
+? out Что выведет код?
+```swift
+print(["4", "a", "6"].compactMap { Int($0) }.reduce(0, +))
+```
+> 10
+= "a" отброшен, 4 + 6.
+? fill Впишите оператор диапазона без верхней границы.
+```swift
+for i in 0___5 { }
+```
+> ..<
+= 0, 1, 2, 3, 4.
+? mc Должен ли switch в Swift покрывать все значения?
++ Да, иначе нужна ветка default
+- Нет
+- Только для enum
+- Только для строк
+= switch исчерпывающий.
+
+@lesson Функции и замыкания
+У параметров есть внешние метки для читаемых вызовов: `move(from: a, to: b)`. `_` убирает метку. Параметры по умолчанию и variadic `Int...` поддерживаются.
+Замыкание — функция без имени в фигурных скобках. Короткие аргументы `$0`, `$1`. Если замыкание — последний аргумент, его пишут после скобок (trailing closure).
+Замыкание, которое вызовется позже (после возврата функции), помечается `@escaping`. Захват `self` в таких замыканиях может создать цикл ссылок — используйте `[weak self]`.
+```swift
+func send(_ text: String, to user: String, urgent: Bool = false) -> String {
+    "\(urgent ? "СРОЧНО: " : "")\(user) ← \(text)"
+}
+print(send("Привет", to: "Ада"))
+
+func sum(_ nums: Int...) -> Int { nums.reduce(0, +) }
+print(sum(1, 2, 3))                       // 6
+
+let sorted = ["bb", "a", "ccc"].sorted { $0.count < $1.count }
+
+class Loader {
+    var onDone: (() -> Void)?
+    func load(completion: @escaping (String) -> Void) {
+        DispatchQueue.global().async { completion("данные") }
+    }
+}
+```
+! Однострочная функция возвращает выражение без return
+! [weak self] в escaping-замыканиях предотвращает утечки
+! Метки аргументов — часть имени функции
+? out Что выведет код?
+```swift
+func f(_ a: Int, times b: Int = 2) -> Int { a * b }
+print(f(3) + f(1, times: 5))
+```
+> 11
+= 6 + 5.
+? mc Что значит @escaping?
++ Замыкание может быть вызвано после возврата из функции
+- Замыкание выполняется в фоне
+- Замыкание нельзя вызвать
+- Замыкание без параметров
+= Например, обработчик завершения сетевого запроса.
+? fill Впишите список захвата, чтобы не держать сильную ссылку на self.
+```swift
+loader.load { ___ result in self?.show(result) }
+```
+> [weak self]
+= Слабая ссылка разрывает цикл.
+? mc Что значит `_` перед именем параметра?
++ При вызове метка аргумента не пишется
+- Параметр игнорируется
+- Параметр приватный
+- Параметр опциональный
+= Например, sum(1, 2) вместо sum(nums: 1, 2).
+
+@lesson struct, class и enum
+`struct` — значимый тип: копируется при передаче. Методы, меняющие структуру, помечаются `mutating`. Apple рекомендует начинать со struct.
+`class` — ссылочный тип с наследованием и подсчётом ссылок (ARC). Используйте класс, когда нужна общая изменяемая сущность или идентичность.
+`enum` с ассоциированными значениями описывает варианты состояния. Через `switch` их разбирают полностью.
+```swift
+struct Counter {
+    var value = 0
+    mutating func increment() { value += 1 }
+}
+
+final class Session {
+    let user: String
+    init(user: String) { self.user = user }
+}
+
+enum LoadState {
+    case idle
+    case loading
+    case loaded([String])
+    case failed(Error)
+}
+
+func describe(_ s: LoadState) -> String {
+    switch s {
+    case .idle: "Ожидание"
+    case .loading: "Загрузка"
+    case .loaded(let items): "Загружено: \(items.count)"
+    case .failed(let error): "Ошибка: \(error.localizedDescription)"
+    }
+}
+```
+! mutating нужен методам struct, которые меняют поля
+! final запрещает наследование и ускоряет вызовы
+! enum с данными — лучший способ описать состояние экрана
+? out Что выведет код?
+```swift
+class Box { var v = 1 }
+let a = Box()
+let b = a
+b.v = 9
+print(a.v)
+```
+> 9
+= Класс — ссылочный тип.
+? fill Впишите модификатор метода struct, который меняет её поля.
+```swift
+___ func reset() { value = 0 }
+```
+> mutating
+= Без него компилятор запретит изменение.
+? mc Когда лучше выбрать class вместо struct?
++ Когда нужна общая изменяемая сущность с идентичностью
+- Всегда
+- Для маленьких моделей данных
+- Для enum
+= В остальных случаях struct проще и безопаснее.
+? mc Что хранит `case loaded([String])`?
++ Ассоциированное значение — массив строк
+- Строку по умолчанию
+- Сырое значение enum
+- Ничего
+= Ассоциированные значения задаются при создании варианта.
+
+@lesson Протоколы и расширения
+Протокол — контракт с требованиями к методам и свойствам. Его реализуют struct, class и enum. Протоколы — основа Swift: `Equatable`, `Hashable`, `Codable`, `Identifiable`.
+`extension` добавляет методы существующим типам и реализации по умолчанию протоколам. Так строят протокольно-ориентированный код.
+`some Protocol` — непрозрачный тип: функция возвращает конкретный тип, но скрывает его. `any Protocol` — коробка с любым типом, реализующим протокол.
+```swift
+protocol Shape {
+    var area: Double { get }
+}
+
+extension Shape {
+    func describe() -> String { "Площадь \(area)" }
+}
+
+struct Square: Shape { let side: Double; var area: Double { side * side } }
+struct Circle: Shape { let r: Double; var area: Double { .pi * r * r } }
+
+extension Int {
+    var isEven: Bool { self % 2 == 0 }
+}
+
+let shapes: [any Shape] = [Square(side: 2), Circle(r: 1)]
+print(shapes.map { $0.describe() })
+print(4.isEven)                         // true
+
+struct User: Codable, Hashable, Identifiable {
+    let id: Int
+    let name: String
+}
+```
+! Codable даёт кодирование в JSON без ручного кода
+! Identifiable нужен спискам в SwiftUI
+! some — один конкретный тип, any — любой подходящий
+? mc Что добавляет extension?
++ Новую функциональность существующему типу
+- Наследование
+- Новое хранимое свойство
+- Приватность
+= Хранимые свойства в extension добавить нельзя.
+? fill Впишите протокол для кодирования в JSON и обратно.
+```swift
+struct Post: ___ { let title: String }
+```
+> Codable
+= Codable = Encodable & Decodable.
+? out Что выведет код?
+```swift
+extension String { var shout: String { uppercased() + "!" } }
+print("hi".shout)
+```
+> HI!
+= Вычисляемое свойство из расширения.
+? mc Зачем протокол Identifiable в SwiftUI?
++ Чтобы списки могли различать элементы по id
+- Для сохранения в базу
+- Для сравнения строк
+- Для анимаций обязательно
+= ForEach использует id для обновлений.
+
+@lesson Ошибки и async/await
+Функция, которая может вернуть ошибку, помечается `throws`. Вызов пишут через `try` внутри `do`/`catch`. `try?` превращает ошибку в nil.
+Асинхронные функции помечаются `async` и вызываются через `await`. `async let` запускает несколько операций параллельно. `Task { }` запускает асинхронную работу из синхронного кода.
+`@MainActor` гарантирует выполнение на главном потоке — обновлять UI можно только там. Акторы (`actor`) защищают своё состояние от гонок данных.
+```swift
+enum APIError: Error { case badStatus(Int) }
+
+struct Exercise: Decodable { let name: String }
+
+func loadExercises() async throws -> [Exercise] {
+    let url = URL(string: "https://example.com/exercises.json")!
+    let (data, response) = try await URLSession.shared.data(from: url)
+    guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+        throw APIError.badStatus((response as? HTTPURLResponse)?.statusCode ?? 0)
+    }
+    return try JSONDecoder().decode([Exercise].self, from: data)
+}
+
+@MainActor
+func refresh() async {
+    async let a = loadExercises()
+    async let b = loadExercises()
+    do {
+        let all = try await a + b
+        print(all.count)
+    } catch {
+        print("Ошибка: \(error)")
+    }
+}
+```
+! Обновление UI — только на MainActor
+! try? удобен, когда причина ошибки не важна
+! async let запускает задачи параллельно, обычные await — по очереди
+? mc Как вызвать функцию с throws?
+- Просто по имени
++ Через try внутри do/catch или в другой throws-функции
+- Через await
+- Через catch без try
+= try помечает место возможной ошибки.
+? fill Впишите конструкцию параллельного запуска асинхронной операции.
+```swift
+___ let user = api.loadUser()
+```
+> async
+= Результат забирают через await позже.
+? mc Что вернёт `try? JSONDecoder().decode(User.self, from: badData)`?
++ nil
+- Пустой User
+- Исключение
+- false
+= try? превращает ошибку в nil.
+? mc Где можно обновлять интерфейс?
++ Только на главном потоке (MainActor)
+- В любом потоке
+- Только в фоне
+- Только в Task.detached
+= Иначе возможны сбои и предупреждения.
+
+@lesson SwiftUI: состояние и архитектура
+SwiftUI описывает интерфейс декларативно: `View` — функция от состояния. Изменилось состояние — SwiftUI сам перерисует нужные части.
+`@State` хранит локальное состояние экрана, `@Binding` передаёт его дочернему View для изменения. Модели с макросом `@Observable` отслеживаются автоматически. `@Environment` даёт доступ к общим значениям.
+MVVM: View отображает состояние модели и передаёт действия, модель содержит логику и ходит в сеть или базу. Навигация через `NavigationStack`, списки — `List` и `ForEach`.
+```swift
+import SwiftUI
+
+@Observable
+final class WorkoutsModel {
+    var items: [String] = []
+    var isLoading = false
+    func add(_ name: String) { items.append(name) }
+}
+
+struct WorkoutsView: View {
+    @State private var model = WorkoutsModel()
+    @State private var newName = ""
+
+    var body: some View {
+        NavigationStack {
+            List {
+                ForEach(model.items, id: \.self) { Text($0) }
+            }
+            .navigationTitle("Тренировки")
+            .toolbar {
+                TextField("Новая", text: $newName)
+                Button("Добавить") { model.add(newName); newName = "" }
+            }
+        }
+    }
+}
+```
+! `$value` передаёт Binding — двустороннюю связь
+! Не держите сетевую логику прямо во View
+! body пересчитывается часто — он должен быть быстрым и без побочных эффектов
+? mc Что делает @State?
++ Хранит изменяемое состояние, при изменении которого View перерисуется
+- Делает свойство константой
+- Сохраняет данные на диск
+- Создаёт глобальную переменную
+= Владеет состоянием конкретный View.
+? fill Впишите префикс, который передаёт Binding к @State-свойству.
+```swift
+TextField("Имя", text: ___name)
+```
+> $
+= $name — проекция Binding.
+? mc Что значит `some View` в `var body: some View`?
++ Конкретный тип View, скрытый от вызывающего
+- Любой View, определяемый в рантайме
+- Опциональный View
+- Массив View
+= Непрозрачный тип.
+? mc Где по MVVM должна быть загрузка данных из сети?
+- В body
++ В модели (ViewModel), которую вызывает View
+- В AppDelegate
+- В расширении View
+= View только отображает состояние.
+
+@lesson ARC, память и сборка в Xcode
+Swift управляет памятью через ARC — автоматический подсчёт ссылок. Объект класса освобождается, когда на него не осталось сильных ссылок. Сборщика мусора нет.
+Цикл сильных ссылок (A держит B, B держит A) не освободится никогда — это утечка. Разрывают его через `weak` (опциональная, обнуляется) или `unowned` (не опциональная, объект должен жить дольше).
+Приложение собирают в Xcode. Зависимости подключают через Swift Package Manager. Для публикации нужны аккаунт Apple Developer, подпись, архив (Product → Archive) и загрузка в App Store Connect. Тестируют через TestFlight.
+```swift
+final class Person {
+    let name: String
+    var apartment: Apartment?
+    init(name: String) { self.name = name }
+    deinit { print("\(name) освобождён") }
+}
+
+final class Apartment {
+    weak var tenant: Person?            // слабая ссылка разрывает цикл
+}
+
+var p: Person? = Person(name: "Ада")
+let flat = Apartment()
+p?.apartment = flat
+flat.tenant = p
+p = nil                                 // "Ада освобождён"
+```
+! Делегаты почти всегда объявляют weak
+! deinit помогает проверить, что объект освобождается
+! Instruments → Leaks находит утечки
+? mc Как Swift управляет памятью объектов классов?
+- Сборщиком мусора
++ Автоматическим подсчётом ссылок (ARC)
+- Вручную через free
+- Не управляет
+= Объект освобождается при нулевом счётчике.
+? fill Впишите модификатор ссылки, который разрывает цикл и становится nil.
+```swift
+___ var delegate: Delegate?
+```
+> weak
+= unowned не становится nil.
+? mc Что вызовет утечку памяти?
++ Два объекта держат сильные ссылки друг на друга
+- Использование struct
+- Использование let
+- Опционалы
+= ARC не освобождает циклы.
+? mc Через что раздают бета-версию iOS-приложения тестировщикам?
+- App Store
++ TestFlight
+- GitHub
+- Xcode Cloud только
+= TestFlight входит в App Store Connect.
+
+@exam
+? out Что выведет код?
+```swift
+struct P { var x = 0 }
+var a = P()
+var b = a
+b.x = 5
+print(a.x, b.x)
+```
+> 0 5
+= struct копируется.
+? out Что выведет код?
+```swift
+let nums = [3, 1, 2]
+print(nums.sorted().first!, nums.first!)
+```
+> 1 3
+= sorted возвращает новый массив.
+? out Что выведет код?
+```swift
+var s: String? = "swift"
+print(s?.count ?? 0, s.map { $0.uppercased() } ?? "")
+```
+> 5 SWIFT
+= map у опционала применяется к значению.
+? mc Чем `unowned` отличается от `weak`?
++ unowned не опционален и не обнуляется — обращение после освобождения вызовет сбой
+- unowned сильнее weak
+- weak работает только со struct
+- Ничем
+= Используйте unowned, если объект точно живёт дольше.
+? out Что выведет код?
+```swift
+var counter = 0
+let inc = { counter += 1 }
+inc(); inc()
+print(counter)
+```
+> 2
+= Замыкание захватывает переменную по ссылке.
+? mc Что такое actor?
++ Ссылочный тип, который защищает своё состояние от одновременного доступа
+- Вид struct
+- Поток выполнения
+- Протокол для UI
+= Обращения к actor извне идут через await.
+? fill Впишите ключевое слово для свойства, вычисляемого при первом обращении.
+```swift
+___ var formatter = DateFormatter()
+```
+> lazy
+= lazy var создаётся при первом использовании.
+? out Что выведет код?
+```swift
+enum Dir: String { case north = "N", south = "S" }
+print(Dir(rawValue: "S") == .south, Dir(rawValue: "X") == nil)
+```
+> true true
+= Инициализатор по rawValue возвращает опционал.
+? mc Чем `some View` отличается от `any View`-подобной коробки?
++ some сохраняет конкретный тип для компилятора, any стирает его
+- Ничем
+- some медленнее
+- any нельзя вернуть из функции
+= Непрозрачные типы эффективнее.
+? out Что выведет код?
+```swift
+let words = ["a", "bb", "a"]
+print(Set(words).count, Dictionary(grouping: words, by: { $0 })["a"]!.count)
+```
+> 2 2
+= Уникальных слов два, "a" встречается дважды.
+? mc Что делает defer в Swift?
++ Выполняет блок при выходе из текущей области видимости
+- Откладывает вызов функции на следующий кадр
+- Запускает асинхронную задачу
+- Ловит ошибки
+= Удобно для освобождения ресурсов.
+? mc Какой модификатор доступа видимости по умолчанию?
+- public
+- private
++ internal
+- open
+= internal виден внутри модуля.

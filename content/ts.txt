@@ -1,0 +1,472 @@
+@lang id=ts name=TypeScript land=Крепость TS color=#3f7fbf
+@about JavaScript со статическими типами. Стандарт для больших фронтенд- и Node.js-проектов.
+@project REST API на Node.js и TypeScript
+Сервис заметок с авторизацией на Express или Fastify, полностью на TypeScript.
+- Строгий режим "strict": true, ни одного any в коде
+- Эндпоинты CRUD для заметок, валидация входных данных через zod
+- Регистрация и вход с хэшированием пароля (bcrypt) и JWT
+- Хранение в SQLite или PostgreSQL через Prisma
+- Тесты на vitest для сервисного слоя
+- README с примерами запросов и docker-compose для запуска
+
+@lesson Зачем TypeScript и базовые типы
+TypeScript — надстройка над JavaScript: компилятор `tsc` проверяет типы и выдаёт обычный JS. Ошибки вроде опечатки в имени поля ловятся до запуска программы.
+Тип указывают после двоеточия: `let age: number`. Часто тип выводится сам: `let name = "Ада"` уже `string`. Базовые типы: `string`, `number`, `boolean`, массивы `number[]`, кортежи `[string, number]`.
+`any` отключает проверку и сводит пользу TS к нулю. Для неизвестных данных используйте `unknown`: его нужно сузить проверкой перед использованием.
+```code
+let count: number = 0;
+const tags: string[] = ["ts", "node"];
+const pair: [string, number] = ["Ада", 36];
+
+function parse(input: unknown): number {
+  if (typeof input === "number") return input;
+  if (typeof input === "string") return Number(input);
+  throw new Error("Не число");
+}
+
+// count = "10";  // Ошибка: string не присваивается number
+```
+! Включайте `"strict": true` в tsconfig.json с первого дня
+! unknown безопаснее any: его нельзя использовать без проверки
+! Типы существуют только при компиляции, в рантайме их нет
+? mc Что делает компилятор tsc?
+- Запускает TypeScript в браузере напрямую
++ Проверяет типы и превращает код в JavaScript
+- Оптимизирует код для скорости
+- Подключает библиотеки
+= Браузер исполняет уже скомпилированный JS.
+? mc Чем unknown отличается от any?
++ unknown нельзя использовать без проверки типа
+- Ничем
+- any строже
+- unknown разрешён только в функциях
+= Это безопасная альтернатива any.
+? fill Впишите тип массива строк.
+```code
+const names: ___ = ["Ада", "Алан"];
+```
+> string[]
+> Array<string>
+= Обе записи равнозначны.
+? mc Существуют ли типы TypeScript во время выполнения программы?
+- Да, всегда
++ Нет, они стираются при компиляции
+- Только в Node.js
+- Только интерфейсы
+= Проверка типов в рантайме требует отдельных инструментов, например zod.
+
+@lesson Интерфейсы и type
+`interface` и `type` описывают форму объекта. Поле со знаком `?` необязательное, `readonly` запрещает изменение.
+`type` умеет больше: объединения `"a" | "b"`, пересечения `A & B`, псевдонимы для любых типов. `interface` можно расширять через `extends` и дополнять повторным объявлением.
+TypeScript использует структурную типизацию: объект подходит под тип, если у него есть нужные поля, независимо от того, как он создан.
+```code
+interface User {
+  readonly id: number;
+  name: string;
+  email?: string;
+}
+
+interface Admin extends User {
+  permissions: string[];
+}
+
+type Status = "draft" | "published" | "archived";
+type WithTimestamps<T> = T & { createdAt: Date };
+
+const u: User = { id: 1, name: "Ада" };
+// u.id = 2;  // Ошибка: readonly
+```
+! Объединение строковых литералов заменяет enum во многих случаях
+! Лишнее поле в объектном литерале — ошибка, а в переменной — нет
+! Для публичных моделей обычно выбирают interface
+? mc Что означает `email?: string`?
+- Поле может быть null
++ Поле может отсутствовать (тип string | undefined)
+- Поле только для чтения
+- Поле приватное
+= Знак вопроса делает поле необязательным.
+? mc Какая типизация в TypeScript?
+- Номинальная
++ Структурная
+- Динамическая
+- Утиная только в рантайме
+= Совместимость определяется формой объекта.
+? fill Впишите модификатор, запрещающий менять поле.
+```code
+interface Point { ___ x: number; }
+```
+> readonly
+= readonly проверяется при компиляции.
+? fill Впишите тип, разрешающий только три значения.
+```code
+type Size = "s" ___ "m" ___ "l";
+```
+> |
+= Объединение строковых литералов.
+
+@lesson Функции и сужение типов
+Параметры и результат функции типизируют явно: `function f(a: number): string`. Тип `void` значит «ничего не возвращает», `never` — «никогда не завершается нормально».
+Сужение (narrowing): после проверок `typeof`, `instanceof`, `in` или сравнения с литералом TypeScript понимает более точный тип внутри ветки.
+Размеченное объединение — объекты с общим полем-меткой (`kind`). Проверка метки в `switch` сужает тип, а `never` в default гарантирует, что обработаны все варианты.
+```code
+type Shape =
+  | { kind: "circle"; r: number }
+  | { kind: "rect"; w: number; h: number };
+
+function area(s: Shape): number {
+  switch (s.kind) {
+    case "circle": return Math.PI * s.r ** 2;
+    case "rect":   return s.w * s.h;
+    default: {
+      const check: never = s;   // ошибка, если забыли вариант
+      return check;
+    }
+  }
+}
+```
+! Проверка через never ловит забытые case при добавлении нового варианта
+! Опциональный параметр `x?: number` ставится после обязательных
+! Пользовательский type guard: `function isUser(x): x is User`
+? mc Какой тип у функции, которая всегда бросает исключение?
+- void
++ never
+- undefined
+- any
+= never означает, что нормального возврата нет.
+? mc Что такое сужение типа?
++ Уточнение типа внутри ветки после проверки
+- Сокращение имени типа
+- Удаление необязательных полей
+- Приведение через as
+= Например, после typeof x === "string" x считается строкой.
+? fill Впишите возвращаемый тип функции, которая ничего не возвращает.
+```code
+function log(msg: string): ___ { console.log(msg); }
+```
+> void
+= void — отсутствие значения.
+? fill Впишите оператор проверки наличия свойства для сужения.
+```code
+if ("permissions" ___ user) { /* Admin */ }
+```
+> in
+= Оператор in сужает объединение по наличию поля.
+
+@lesson Дженерики
+Дженерик — тип-параметр, который делает функцию или класс универсальными без потери типов. `function first<T>(arr: T[]): T | undefined` вернёт число для массива чисел и строку для массива строк.
+Ограничение `T extends ...` требует, чтобы тип имел нужные поля. `keyof T` — объединение ключей типа, а `T[K]` — тип значения по ключу.
+Дженерики используются везде: `Array<T>`, `Promise<T>`, `Map<K, V>`, ответы API `ApiResponse<T>`.
+```code
+function first<T>(arr: T[]): T | undefined {
+  return arr[0];
+}
+const n = first([1, 2, 3]);     // number | undefined
+
+function pluck<T, K extends keyof T>(items: T[], key: K): T[K][] {
+  return items.map(i => i[key]);
+}
+const names = pluck([{ name: "Ада", age: 36 }], "name"); // string[]
+
+interface ApiResponse<T> { data: T; error?: string; }
+async function getJSON<T>(url: string): Promise<ApiResponse<T>> {
+  const res = await fetch(url);
+  return { data: (await res.json()) as T };
+}
+```
+! Не плодите дженерики там, где хватит конкретного типа
+! `as T` — это обещание компилятору, а не проверка
+! keyof с extends защищает от опечаток в именах полей
+? mc Что такое `keyof User` для `interface User { id: number; name: string }`?
+- number | string
++ "id" | "name"
+- User[]
+- string
+= keyof даёт объединение имён ключей.
+? fill Впишите ограничение: K должен быть ключом T.
+```code
+function get<T, K ___ keyof T>(o: T, k: K) { return o[k]; }
+```
+> extends
+= extends ограничивает тип-параметр.
+? mc Какой тип вернёт `first(["a", "b"])` для `first<T>(arr: T[]): T | undefined`?
++ string | undefined
+- string
+- any
+- unknown
+= T выводится как string.
+? mc Что проверяет `as T` во время выполнения?
+- Соответствие объекта типу
++ Ничего, это только указание компилятору
+- Наличие обязательных полей
+- Тип каждого поля
+= Для проверки данных нужен валидатор.
+
+@lesson Утилитарные типы
+TypeScript содержит готовые преобразования типов. `Partial<T>` делает все поля необязательными, `Required<T>` — обязательными, `Readonly<T>` — только для чтения.
+`Pick<T, K>` оставляет выбранные поля, `Omit<T, K>` убирает. `Record<K, V>` описывает объект с ключами K и значениями V. `ReturnType<F>` достаёт тип результата функции.
+С ними модели для форм, обновлений и ответов API выводятся из одной сущности, и при изменении сущности всё обновляется автоматически.
+```code
+interface User { id: number; name: string; email: string; password: string; }
+
+type PublicUser = Omit<User, "password">;
+type UserUpdate = Partial<Pick<User, "name" | "email">>;
+type RoleMap = Record<"admin" | "user", string[]>;
+
+function update(id: number, patch: UserUpdate) { /* ... */ }
+update(1, { name: "Ада" });           // ок: email не обязателен
+
+function makeUser() { return { id: 1, ok: true }; }
+type Made = ReturnType<typeof makeUser>; // { id: number; ok: boolean }
+```
+! Выводите типы из одной модели, а не копируйте поля
+! Omit удобен, чтобы не отдать пароль в ответе API
+! Readonly поверхностный: вложенные объекты можно менять
+? mc Какой утилитарный тип сделает все поля необязательными?
++ Partial
+- Optional
+- Pick
+- Required
+= Partial<T> добавляет ? ко всем полям.
+? fill Впишите тип, который уберёт поле password.
+```code
+type Safe = ___<User, "password">;
+```
+> Omit
+= Omit исключает перечисленные ключи.
+? mc Что описывает `Record<string, number>`?
+- Массив чисел
++ Объект со строковыми ключами и числовыми значениями
+- Кортеж
+- Map
+= Например, { a: 1, b: 2 }.
+? fill Впишите утилиту, которая достаёт тип результата функции.
+```code
+type R = ___<typeof fn>;
+```
+> ReturnType
+= ReturnType принимает тип функции.
+
+@lesson Классы и модификаторы доступа
+В классах TypeScript есть модификаторы `public`, `private`, `protected` и `readonly`. Параметр конструктора с модификатором сразу становится полем.
+`abstract` класс нельзя создать напрямую: он задаёт каркас и абстрактные методы для наследников. `implements` проверяет, что класс выполняет контракт интерфейса.
+`private` в TS проверяется только при компиляции. Для настоящей приватности в рантайме используйте поля `#`.
+```code
+interface Repo<T> {
+  find(id: number): T | undefined;
+  save(item: T): void;
+}
+
+abstract class Base {
+  constructor(protected readonly name: string) {}
+  abstract describe(): string;
+}
+
+class MemoryRepo<T extends { id: number }> extends Base implements Repo<T> {
+  private items = new Map<number, T>();
+  find(id: number) { return this.items.get(id); }
+  save(item: T) { this.items.set(item.id, item); }
+  describe() { return `${this.name}: ${this.items.size}`; }
+}
+```
+! Сокращённая запись полей в конструкторе экономит много строк
+! protected доступен в наследниках, private — только в самом классе
+! Программируйте против интерфейсов, а не конкретных классов
+? mc Что значит abstract класс?
+- Класс без методов
++ Класс, экземпляр которого нельзя создать напрямую
+- Класс только со статическими методами
+- Приватный класс
+= Он служит основой для наследников.
+? mc Где доступно поле protected?
+- Везде
+- Только в самом классе
++ В классе и его наследниках
+- Только в том же файле
+= private не видно даже наследникам.
+? fill Впишите слово, которое проверяет соответствие класса интерфейсу.
+```code
+class UserRepo ___ Repo<User> { }
+```
+> implements
+= extends — для наследования классов.
+? mc Скрыто ли поле private в скомпилированном JavaScript?
+- Да, полностью
++ Нет, проверка только при компиляции
+- Только в строгом режиме
+- Только в браузере
+= Для рантайм-приватности нужен #.
+
+@lesson Модули, tsconfig и сборка
+Каждый файл с `import` или `export` — модуль. `export type` и `import type` подключают только типы, они полностью исчезают из итогового JS.
+`tsconfig.json` управляет компиляцией: `strict` включает строгие проверки, `target` — версию JS на выходе, `module` — формат модулей, `outDir` — папку сборки.
+Типы для JS-библиотек ставят отдельными пакетами `@types/имя`, если библиотека не поставляет их сама. Во фронтенде TS собирают Vite или Next.js, в Node.js — `tsc` или `tsx` для разработки.
+```code
+// models.ts
+export interface Note { id: string; text: string; }
+export const MAX_LEN = 500;
+
+// service.ts
+import type { Note } from "./models";
+import { MAX_LEN } from "./models";
+
+export function validate(n: Note): boolean {
+  return n.text.length <= MAX_LEN;
+}
+
+// tsconfig.json
+// { "compilerOptions": { "strict": true, "target": "ES2022",
+//   "module": "NodeNext", "outDir": "dist" } }
+```
+! Не коммитьте папку dist — её создаёт сборка
+! `noUncheckedIndexedAccess` делает arr[i] типом T | undefined
+! Ошибки компиляции нужно чинить, а не глушить через // @ts-ignore
+? mc Что делает `import type`?
++ Импортирует только тип, который исчезнет из JS
+- Импортирует модуль быстрее
+- Подключает @types пакет
+- Делает импорт динамическим
+= Это помогает избежать лишних зависимостей в рантайме.
+? fill Впишите опцию tsconfig, которая включает все строгие проверки.
+```code
+{ "compilerOptions": { "___": true } }
+```
+> strict
+= strict включает целый набор проверок.
+? mc Откуда берутся типы для библиотеки без встроенных типов?
+- Генерируются автоматически
++ Из пакета @types/имя
+- Из tsconfig.json
+- Их нельзя получить
+= Например, @types/express.
+? mc Что лучше сделать с ошибкой типов?
+- Добавить // @ts-ignore
+- Поставить any
++ Исправить тип или код
+- Отключить strict
+= Подавление ошибок прячет реальные баги.
+
+@lesson Валидация данных и типизация API
+Типы TypeScript исчезают при компиляции, поэтому данные из сети, форм и файлов нужно проверять в рантайме. Библиотека zod описывает схему один раз и даёт и проверку, и тип через `z.infer`.
+`schema.parse(data)` бросает ошибку при несоответствии, `safeParse` возвращает объект с `success` — удобно для ответов API без исключений.
+Хорошая практика — проверять данные на границе системы (входящий HTTP-запрос, ответ внешнего API), а внутри приложения работать уже с проверенными типами.
+```ts
+import { z } from "zod";
+
+const NoteSchema = z.object({
+  id: z.string().uuid(),
+  text: z.string().min(1).max(500),
+  tags: z.array(z.string()).default([]),
+});
+type Note = z.infer<typeof NoteSchema>;
+
+async function loadNote(id: string): Promise<Note> {
+  const res = await fetch(`/api/notes/${id}`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return NoteSchema.parse(await res.json());
+}
+
+const result = NoteSchema.safeParse({ id: "x", text: "" });
+if (!result.success) console.log(result.error.issues.length); // 2
+```
+! Проверяйте данные на границах: запросы, ответы, localStorage
+! z.infer избавляет от дублирования интерфейса и схемы
+! safeParse не бросает исключение
+? mc Зачем проверять ответ API, если есть тип?
++ Тип не существует в рантайме, а сервер может прислать что угодно
+- Чтобы ускорить запрос
+- Так требует fetch
+- Для сжатия данных
+= Типы — только проверка при компиляции.
+? fill Впишите способ получить TypeScript-тип из zod-схемы.
+```ts
+type User = z.___<typeof UserSchema>;
+```
+> infer
+= Тип выводится из схемы.
+? mc Что вернёт safeParse при неверных данных?
++ Объект с success: false и описанием ошибок
+- Исключение
+- null
+- Исходные данные
+= parse в этом случае бросил бы ошибку.
+? mc Где лучше всего валидировать входящие данные?
++ На границе системы: при получении запроса или ответа
+- В каждой функции заново
+- Только в базе данных
+- Только в интерфейсе
+= Внутри приложение работает с проверенными типами.
+
+@exam
+? mc Какой тип у `x` после `const x = [1, "a"]`?
+- [number, string]
++ (string | number)[]
+- any[]
+- unknown[]
+= Без as const выводится массив объединения.
+? mc Какой тип у `x` после `const x = [1, "a"] as const`?
++ readonly [1, "a"]
+- (string | number)[]
+- [number, string]
+- any
+= as const делает литеральный кортеж только для чтения.
+? mc Что вернёт `typeof` в позиции типа: `type T = typeof config`?
+- Строку "object"
++ Тип переменной config
+- Ошибку
+- unknown
+= В позиции типа typeof берёт тип значения.
+? fill Впишите тип: все поля T только для чтения.
+```code
+type Frozen<T> = ___<T>;
+```
+> Readonly
+= Readonly<T> добавляет readonly ко всем полям.
+? mc Что выведет TS-ошибку?
+- const a: number | string = 5;
++ const b: "a" | "b" = "c";
+- const c: unknown = 5;
+- let d: any = "x";
+= "c" не входит в объединение.
+? mc Что такое `T extends string ? "yes" : "no"`?
+- Ограничение дженерика
++ Условный тип
+- Тернарный оператор в рантайме
+- Ошибка синтаксиса
+= Условные типы вычисляются при компиляции.
+? out Что выведет скомпилированный код?
+```code
+enum Color { Red, Green, Blue }
+console.log(Color.Blue, Color[0]);
+```
+> 2 Red
+= Числовой enum имеет обратное отображение.
+? mc Какой тип у `Parameters<(a: number, b: string) => void>`?
++ [a: number, b: string]
+- number | string
+- void
+- (number | string)[]
+= Parameters возвращает кортеж типов параметров.
+? fill Впишите оператор non-null assertion.
+```code
+const el = document.getElementById("app")___;
+```
+> !
+= Восклицательный знак убирает null из типа. Используйте осторожно.
+? mc Зачем `satisfies`: `const cfg = {...} satisfies Config`?
++ Проверить соответствие типу, сохранив точный выведенный тип
+- Привести объект к типу Config
+- Сделать объект readonly
+- Проверить объект в рантайме
+= В отличие от аннотации, satisfies не расширяет тип.
+? mc Какой тип у `arr[0]` при `noUncheckedIndexedAccess`, если arr: string[]?
+- string
++ string | undefined
+- unknown
+- never
+= Опция учитывает, что элемента может не быть.
+? mc Почему данные из fetch лучше валидировать (например zod), даже с типами?
+- TypeScript медленный
++ Типы не проверяют данные в рантайме, сервер может вернуть что угодно
+- fetch возвращает any только в Node.js
+- Так требует strict
+= Типизация JSON через as — это допущение, а не проверка.

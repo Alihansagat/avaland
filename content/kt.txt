@@ -1,0 +1,483 @@
+@lang id=kt name=Kotlin land=Котлинские фьорды color=#8f6ad6
+@about Современный язык JVM. Основной язык Android и популярный выбор для бэкенда.
+@project Android-приложение «Трекер привычек»
+Приложение на Jetpack Compose для отметки ежедневных привычек.
+- Экраны списка, создания и статистики с навигацией Compose Navigation
+- Архитектура MVVM: ViewModel со StateFlow, репозиторий
+- Хранение в Room с Flow-запросами
+- Напоминания через WorkManager
+- Юнит-тесты ViewModel с корутинами (kotlinx-coroutines-test)
+- APK в релизах GitHub, скриншоты и описание архитектуры в README
+
+@lesson Переменные, типы и строки
+`val` — значение только для чтения, `var` — изменяемая переменная. Предпочитайте `val`: код с неизменяемыми данными проще понимать.
+Тип выводится автоматически, но его можно указать: `val age: Int = 36`. Всё в Kotlin — объекты, при этом компилятор сам использует примитивы JVM там, где можно.
+Строковые шаблоны подставляют значения: `"$name"` или `"${user.name}"`. Тройные кавычки создают многострочную строку. `if` и `when` — выражения и возвращают значение.
+```kotlin
+val name = "Ада"
+var score = 10
+score += 5
+val level: Int = 3
+
+println("$name: ${score * level}")   // Ада: 45
+val status = if (score > 10) "pro" else "new"
+val text = """
+    Многострочный
+    текст
+""".trimIndent()
+println(7 / 2)        // 3
+println(7 / 2.0)      // 3.5
+```
+! val по умолчанию, var только когда нужно менять
+! if — выражение, тернарного оператора в Kotlin нет
+! `${}` нужен для выражений, `$x` — для простых имён
+? mc Чем val отличается от var?
++ val нельзя переприсвоить
+- val хранится быстрее
+- var только для чисел
+- Ничем
+= val — ссылка только для чтения.
+? out Что выведет код?
+```kotlin
+val a = 5
+println("a = ${a * 2}")
+```
+> a = 10
+= Выражение в ${} вычисляется.
+? fill Впишите, чем в Kotlin заменяют тернарный оператор.
+```kotlin
+val label = ___ (x > 0) "плюс" else "минус"
+```
+> if
+= if возвращает значение.
+? out Что выведет код?
+```kotlin
+println(10 / 4)
+```
+> 2
+= Деление целых отбрасывает дробную часть.
+
+@lesson Условия, циклы и when
+`when` — мощная замена switch: сравнивает со значениями, диапазонами (`in 1..9`), типами (`is String`) или работает без аргумента как цепочка условий. Как и if, это выражение.
+Циклы: `for (x in collection)`, диапазоны `1..10`, `until`, `downTo`, `step`. `while` и `do-while` тоже есть. `forEachIndexed` и `withIndex()` дают индекс.
+Метки `break@outer` выходят из вложенного цикла. В лямбдах `return@forEach` пропускает текущий элемент.
+```kotlin
+fun grade(score: Int) = when (score) {
+    in 90..100 -> "A"
+    in 75 until 90 -> "B"
+    else -> "C"
+}
+
+fun describe(x: Any) = when (x) {
+    is Int -> "число $x"
+    is String -> "строка длиной ${x.length}"
+    else -> "что-то ещё"
+}
+
+for (i in 10 downTo 0 step 5) print("$i ")   // 10 5 0
+for ((i, v) in listOf("a", "b").withIndex()) println("$i:$v")
+println(grade(80))   // B
+```
+! when без else должен покрывать все варианты, если используется как выражение
+! `until` не включает верхнюю границу
+! is в when сразу делает smart cast
+? out Что выведет код?
+```kotlin
+for (i in 1..9 step 4) print(i)
+```
+> 159
+= 1, 5, 9.
+? out Что выведет код?
+```kotlin
+val x = 15
+println(when { x % 15 == 0 -> "FizzBuzz"; x % 3 == 0 -> "Fizz"; else -> x })
+```
+> FizzBuzz
+= Первая подходящая ветка.
+? fill Впишите функцию для обратного диапазона от 5 до 1.
+```kotlin
+for (i in 5 ___ 1) print(i)
+```
+> downTo
+= 5 4 3 2 1.
+? mc Что делает `is String` в ветке when?
++ Проверяет тип и делает smart cast к String внутри ветки
+- Приводит значение к строке
+- Сравнивает с пустой строкой
+- Объявляет переменную
+= Можно сразу обращаться к x.length.
+
+@lesson Null-безопасность
+Типы делятся на не-nullable (`String`) и nullable (`String?`). В обычную переменную нельзя положить null — компилятор не даст.
+Безопасный вызов `?.` вернёт null вместо падения. Элвис-оператор `?:` подставляет значение по умолчанию. `!!` утверждает, что значения не null, и бросает исключение, если вы ошиблись.
+После проверки `if (x != null)` компилятор сам считает x не-null (smart cast). Функция `let` выполняет блок только для не-null значения.
+```kotlin
+var email: String? = null
+val length = email?.length ?: 0        // 0
+email?.let { sendTo(it) }              // не выполнится
+
+fun greet(name: String?) {
+    if (name == null) return
+    println(name.uppercase())          // smart cast к String
+}
+
+val port = System.getenv("PORT")?.toIntOrNull() ?: 8080
+```
+! `!!` — почти всегда признак плохого кода
+! `?:` удобно сочетать с return и throw: `val u = find(id) ?: return`
+! Java-методы возвращают «платформенные» типы — проверяйте их
+? mc Что вернёт `s?.length`, если s = null?
+- 0
++ null
+- NullPointerException
+- -1
+= Безопасный вызов не падает.
+? out Что выведет код?
+```kotlin
+val s: String? = null
+println(s?.length ?: -1)
+```
+> -1
+= Элвис подставил значение по умолчанию.
+? fill Впишите оператор значения по умолчанию.
+```kotlin
+val name = user?.name ___ "Гость"
+```
+> ?:
+= Элвис-оператор.
+? mc Что делает `x!!`?
+- Проверяет x на null и возвращает false
++ Возвращает x или бросает NullPointerException, если x — null
+- Делает x неизменяемым
+- Копирует x
+= Используйте только когда null действительно невозможен.
+
+@lesson Функции и лямбды
+Функции объявляют через `fun`. Однострочная функция пишется через `=`. Параметры могут иметь значения по умолчанию, а аргументы — передаваться по имени.
+Функции высшего порядка принимают или возвращают функции. Лямбду пишут в фигурных скобках, единственный параметр доступен как `it`. Если лямбда — последний аргумент, её выносят за скобки.
+Функции-расширения добавляют методы к существующим классам без наследования: `fun String.isEmail(): Boolean`.
+```kotlin
+fun area(w: Int, h: Int = w) = w * h
+
+fun String.initials() = split(" ").joinToString("") { it.first().uppercase() }
+
+fun repeatTimes(n: Int, action: (Int) -> Unit) {
+    for (i in 1..n) action(i)
+}
+
+println(area(3))              // 9
+println(area(w = 2, h = 5))   // 10
+println("ада лавлейс".initials())  // АЛ
+repeatTimes(2) { println("Шаг $it") }
+```
+! Именованные аргументы делают вызовы понятнее
+! it удобен только в коротких лямбдах
+! Расширения не меняют класс — это синтаксический сахар над статической функцией
+? out Что выведет код?
+```kotlin
+fun f(a: Int, b: Int = 10) = a + b
+println(f(1) + f(1, 1))
+```
+> 13
+= 11 + 2.
+? mc Как зовут неявный параметр лямбды с одним аргументом?
+- this
++ it
+- arg
+- _
+= Например: list.map { it * 2 }.
+? fill Впишите синтаксис диапазона от 1 до 5 включительно.
+```kotlin
+for (i in 1___5) println(i)
+```
+> ..
+= Для невключительного верхнего конца есть until или ..<.
+? mc Что такое функция-расширение?
++ Функция, которая вызывается как метод существующего класса
+- Функция внутри класса
+- Функция с параметрами по умолчанию
+- Переопределённый метод
+= Например, fun Int.isEven() = this % 2 == 0.
+
+@lesson Коллекции
+Коллекции бывают только для чтения (`List`, `Set`, `Map`) и изменяемые (`MutableList` и др.). Создают их через `listOf`, `mutableListOf`, `mapOf("a" to 1)`.
+Богатая стандартная библиотека: `filter`, `map`, `groupBy`, `associateBy`, `sumOf`, `sortedBy`, `firstOrNull`, `partition`.
+`Sequence` вычисляет цепочку лениво, по элементу, — полезно для больших коллекций и длинных цепочек операций.
+```kotlin
+data class Order(val customer: String, val total: Int, val paid: Boolean)
+
+val orders = listOf(
+    Order("Ада", 120, true),
+    Order("Алан", 80, false),
+    Order("Ада", 200, true),
+)
+
+val revenue = orders.filter { it.paid }.sumOf { it.total }       // 320
+val byCustomer = orders.groupBy { it.customer }                   // Map<String, List<Order>>
+val (paid, unpaid) = orders.partition { it.paid }
+val top = orders.maxByOrNull { it.total }?.customer               // Ада
+val ages = mapOf("Ада" to 36, "Алан" to 41)
+```
+! listOf возвращает список только для чтения
+! firstOrNull безопаснее first
+! `to` создаёт пару для mapOf
+? out Что выведет код?
+```kotlin
+println(listOf(1, 2, 3, 4).filter { it > 2 }.map { it * 10 })
+```
+> [30, 40]
+= Отобраны 3 и 4.
+? mc Можно ли вызвать add у результата listOf?
+- Да
++ Нет, это список только для чтения
+- Только для чисел
+- Только внутри функции
+= Нужен mutableListOf.
+? fill Впишите функцию, которая вернёт null вместо исключения для пустого списка.
+```kotlin
+val first = users.___()
+```
+> firstOrNull
+= first() на пустом списке бросит NoSuchElementException.
+? out Что выведет код?
+```kotlin
+val (even, odd) = (1..6).partition { it % 2 == 0 }
+println(odd)
+```
+> [1, 3, 5]
+= partition делит на два списка.
+
+@lesson Классы, data class, sealed
+Основной конструктор пишут в заголовке класса: `class User(val name: String)`. Классы по умолчанию `final`, для наследования их помечают `open`.
+`data class` автоматически получает `equals`, `hashCode`, `toString`, `copy` и деструктуризацию. Это стандарт для моделей данных.
+`sealed` класс или интерфейс ограничивает набор наследников. `when` по sealed-типу проверяется компилятором на полноту — удобно для состояний экрана. `object` — синглтон.
+```kotlin
+data class User(val id: Int, val name: String)
+
+val u = User(1, "Ада")
+val renamed = u.copy(name = "Ада Л.")
+println(u == User(1, "Ада"))      // true
+
+sealed interface UiState {
+    object Loading : UiState
+    data class Success(val items: List<String>) : UiState
+    data class Error(val message: String) : UiState
+}
+
+fun render(s: UiState) = when (s) {
+    UiState.Loading -> "Загрузка"
+    is UiState.Success -> "Элементов: ${s.items.size}"
+    is UiState.Error -> "Ошибка: ${s.message}"
+}
+```
+! Классы final по умолчанию — для наследования нужен open
+! copy создаёт новый объект, исходный не меняется
+! when по sealed без else ловит забытые состояния при компиляции
+? mc Что нужно, чтобы класс можно было наследовать?
+- Ничего
++ Пометить его open
+- Сделать data class
+- Сделать abstract обязательно
+= По умолчанию классы final.
+? out Что выведет код?
+```kotlin
+data class P(val x: Int, val y: Int)
+val (a, b) = P(3, 4)
+println(a + b)
+```
+> 7
+= data class поддерживает деструктуризацию.
+? fill Впишите ключевое слово синглтона.
+```kotlin
+___ Config { val url = "https://api" }
+```
+> object
+= object создаёт единственный экземпляр.
+? mc Зачем sealed для состояний экрана?
++ Компилятор проверит, что when обработал все варианты
+- Чтобы состояния были быстрее
+- Чтобы нельзя было создать объект
+- Для сериализации
+= Набор наследников известен заранее.
+
+@lesson Корутины
+Корутины — лёгкие задачи, которые приостанавливаются без блокировки потока. Функция с `suspend` может вызывать другие suspend-функции, например сетевые запросы.
+Корутины запускают в области (scope): `launch` — без результата, `async` — с результатом через `await()`. Структурная конкурентность: при отмене scope отменяются все его корутины.
+Диспетчеры выбирают поток: `Dispatchers.Main` для UI, `IO` для сети и диска, `Default` для вычислений. В Android используют `viewModelScope`.
+```kotlin
+suspend fun loadUser(id: Int): User = withContext(Dispatchers.IO) {
+    api.getUser(id)
+}
+
+class ProfileViewModel : ViewModel() {
+    fun load() = viewModelScope.launch {
+        try {
+            val user = async { loadUser(1) }
+            val stats = async { loadStats(1) }
+            show(user.await(), stats.await())   // параллельно
+        } catch (e: IOException) {
+            showError(e.message)
+        }
+    }
+}
+```
+! suspend-функцию можно вызвать только из корутины или другой suspend-функции
+! Не используйте GlobalScope: корутина переживёт экран и утечёт
+! Два async подряд выполняются параллельно, два обычных вызова — по очереди
+? mc Что значит модификатор suspend?
+- Функция выполняется в отдельном потоке
++ Функция может приостанавливаться, не блокируя поток
+- Функция запускается позже
+- Функция не возвращает значение
+= Приостановка не занимает поток.
+? mc Чем async отличается от launch?
++ async возвращает результат через await()
+- launch быстрее
+- async блокирует поток
+- Ничем
+= launch возвращает Job без результата.
+? fill Впишите диспетчер для сетевых запросов и работы с диском.
+```kotlin
+withContext(Dispatchers.___) { api.load() }
+```
+> IO
+= Default — для вычислений, Main — для UI.
+? mc Почему GlobalScope — плохая идея?
+- Он медленнее
++ Корутина не привязана к жизненному циклу и может утечь
+- Он не поддерживает async
+- Он работает только в тестах
+= Используйте scope экрана или ViewModel.
+
+@lesson Flow и архитектура приложения
+`Flow` — асинхронный поток значений. Он холодный: начинает работать при сборе через `collect`. Операторы `map`, `filter`, `combine`, `debounce` преобразуют поток.
+`StateFlow` хранит текущее состояние и сразу отдаёт его новым подписчикам — идеально для состояния экрана в ViewModel. Room и DataStore умеют возвращать Flow.
+Архитектура MVVM: экран (Compose) только рисует состояние и передаёт события, ViewModel держит логику и StateFlow, репозиторий решает, откуда брать данные.
+```kotlin
+class SearchViewModel(private val repo: Repo) : ViewModel() {
+    private val query = MutableStateFlow("")
+
+    val results: StateFlow<List<Item>> = query
+        .debounce(300)
+        .map { q -> repo.search(q) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    fun onQueryChange(q: String) { query.value = q }
+}
+
+@Composable
+fun SearchScreen(vm: SearchViewModel) {
+    val items by vm.results.collectAsStateWithLifecycle()
+    LazyColumn { items(items) { Text(it.title) } }
+}
+```
+! Экран не должен ходить в сеть или базу напрямую
+! Наружу отдавайте StateFlow, а MutableStateFlow держите приватным
+! debounce экономит запросы при наборе текста
+? mc Что значит «холодный» Flow?
++ Он начинает выдавать значения только при сборе
+- Он работает медленно
+- Он не меняется
+- Он хранит последнее значение
+= Каждый collect запускает поток заново.
+? mc Что отличает StateFlow?
+- Он холодный
++ Всегда имеет текущее значение и сразу отдаёт его подписчикам
+- Он только для UI-потока
+- Он не поддерживает map
+= Это держатель состояния.
+? fill Впишите оператор, который пропускает значения, пока ввод не затихнет 300 мс.
+```kotlin
+query.___(300)
+```
+> debounce
+= Удобен для поиска по мере ввода.
+? mc Кто в MVVM отвечает за загрузку данных из сети?
+- Composable-экран
+- Activity
++ Репозиторий, вызываемый из ViewModel
+- Тема приложения
+= Экран только отображает состояние.
+
+@exam
+? out Что выведет код?
+```kotlin
+val list = mutableListOf(1, 2, 3)
+val copy = list
+copy.add(4)
+println(list.size)
+```
+> 4
+= Обе переменные ссылаются на один список.
+? out Что выведет код?
+```kotlin
+data class A(val x: Int) { var y = 0 }
+val a1 = A(1).apply { y = 5 }
+val a2 = A(1)
+println(a1 == a2)
+```
+> true
+= equals data class учитывает только свойства из основного конструктора.
+? out Что выведет код?
+```kotlin
+println((1..10).step(3).toList())
+```
+> [1, 4, 7, 10]
+= Шаг 3 от 1 до 10 включительно.
+? out Что выведет код?
+```kotlin
+val x: Any = "hi"
+println(when (x) { is Int -> "int"; is String -> "str ${x.length}"; else -> "?" })
+```
+> str 2
+= Smart cast к String внутри ветки.
+? mc Чем `lateinit var` отличается от nullable?
++ Это не-null переменная, которую инициализируют позже, обращение до инициализации — исключение
+- Это то же самое, что String?
+- lateinit работает с Int
+- lateinit делает переменную val
+= lateinit не поддерживает примитивные типы.
+? mc Что делает `by lazy { ... }`?
+- Выполняет блок при создании объекта
++ Вычисляет значение при первом обращении и запоминает его
+- Делает переменную изменяемой
+- Запускает корутину
+= По умолчанию потокобезопасно.
+? out Что выведет код?
+```kotlin
+val s = "kotlin"
+println(s.let { it.length }.also { print("L") })
+```
+> L6
+= also сначала выполняет print, затем println выводит 6.
+? fill Впишите scope-функцию, которая возвращает сам объект и даёт к нему доступ через this.
+```kotlin
+val user = User().___ { name = "Ада"; age = 36 }
+```
+> apply
+= apply удобен для настройки объекта.
+? mc Что произойдёт при отмене родительской корутины?
++ Все дочерние корутины тоже отменятся
+- Дочерние продолжат работу
+- Приложение упадёт
+- Ничего
+= Это структурная конкурентность.
+? out Что выведет код?
+```kotlin
+val m = mapOf("a" to 1, "b" to 2)
+println(m["c"] ?: m.getValue("b"))
+```
+> 2
+= m["c"] даёт null, элвис берёт значение b.
+? mc Какой оператор сравнивает ссылки в Kotlin?
+- ==
++ ===
+- equals
+- is
+= == вызывает equals.
+? mc Что такое recomposition в Jetpack Compose?
++ Повторный вызов composable-функций при изменении состояния
+- Пересборка проекта
+- Перезапуск Activity
+- Очистка кэша
+= Compose перерисовывает только то, что зависит от изменившегося состояния.

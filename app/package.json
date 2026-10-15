@@ -1,0 +1,31 @@
+{
+  "name": "avaland",
+  "version": "1.0.0",
+  "private": true,
+  "description": "AVALAND — карта-игра для изучения языков программирования",
+  "scripts": {
+    "build": "python3 ../build.py",
+    "assets": "capacitor-assets generate --ios --iconBackgroundColor '#0a1b29' --splashBackgroundColor '#0a1b29'",
+    "sync": "npm run build && cap sync ios",
+    "ios": "npm run sync && cap open ios"
+  },
+  "dependencies": {
+    "@capacitor-community/in-app-review": "^8.0.0",
+    "@capacitor/app": "^8.0.0",
+    "@capacitor/core": "^8.5.3",
+    "@capacitor/filesystem": "^8.1.4",
+    "@capacitor/haptics": "^8.0.2",
+    "@capacitor/ios": "^8.5.3",
+    "@capacitor/local-notifications": "^8.3.1",
+    "@capacitor/preferences": "^8.0.1",
+    "@capacitor/share": "^8.0.3",
+    "@capacitor/splash-screen": "^8.0.2",
+    "@capacitor/status-bar": "^8.0.4",
+    "pyodide": "314.0.7",
+    "sql.js": "1.14.2"
+  },
+  "devDependencies": {
+    "@capacitor/assets": "^3.0.5",
+    "@capacitor/cli": "^8.5.3"
+  }
+}

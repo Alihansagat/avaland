@@ -1,0 +1,527 @@
+@lang id=php name=PHP land=Республика PHP color=#7a86b8
+@about Язык веб-бэкенда. Laravel, WordPress, интернет-магазины и огромное число вакансий.
+@project Блог-платформа на Laravel
+Многопользовательский блог с панелью автора.
+- Регистрация и вход, роли автор и администратор (Laravel Breeze, политики доступа)
+- CRUD постов с загрузкой обложки, тегами и черновиками
+- Комментарии с модерацией, пагинация и поиск
+- Миграции, фабрики и сидеры для тестовых данных
+- Feature-тесты на PHPUnit или Pest для основных сценариев
+- Развёртывание на хостинге или через Docker (Laravel Sail), README
+
+@lesson Синтаксис, переменные и типы
+Код PHP пишут между `<?php` и `?>` (в файлах только с кодом закрывающий тег не ставят). Переменные начинаются с `$`, тип определяется значением.
+Современный PHP поддерживает объявление типов: `function total(int $qty, float $price): float`. Строка `declare(strict_types=1);` в начале файла запрещает неявное приведение типов в вызовах.
+Строки в двойных кавычках подставляют переменные, в одинарных — нет. Конкатенация — точка `.`. Сравнение `===` проверяет и значение, и тип.
+```php
+<?php
+declare(strict_types=1);
+
+$name = 'Ада';
+$age = 36;
+echo "Привет, $name! Через год: " . ($age + 1) . "\n";
+echo 'Без подстановки: $name' . "\n";
+
+function total(int $qty, float $price): float {
+    return $qty * $price;
+}
+echo total(3, 9.5), "\n";          // 28.5
+
+var_dump(0 == "a");    // false в PHP 8
+var_dump("1" === 1);   // false
+$city = $user['city'] ?? 'Алматы';
+```
+! Всегда используйте === вместо ==
+! strict_types=1 в каждом файле ловит ошибки типов
+! Оператор ?? не выдаёт предупреждение на несуществующий ключ
+? out Что выведет код?
+```php
+$x = 5;
+echo 'x = $x', " / ", "x = $x";
+```
+> x = $x / x = 5
+= В одинарных кавычках подстановки нет.
+? fill Впишите оператор конкатенации строк.
+```php
+echo "Итого: " ___ $sum;
+```
+> .
+= Плюс в PHP складывает числа.
+? mc Что делает `declare(strict_types=1)`?
++ Запрещает неявное приведение скалярных типов при вызове функций
+- Включает строгий синтаксис
+- Запрещает глобальные переменные
+- Ускоряет код
+= Например, строка "5" не превратится в int.
+? out Что выведет код?
+```php
+var_dump("10" == "1e1", "10" === "1e1");
+```
+> bool(true) bool(false)
+> bool(true)bool(false)
+= Числовые строки при == сравниваются как числа.
+
+@lesson Массивы и функции
+Массив в PHP — упорядоченный словарь: и список `[1, 2, 3]`, и ассоциативный `['name' => 'Ада']`. Перебирают через `foreach ($arr as $key => $value)`.
+Полезные функции: `count`, `in_array`, `array_map`, `array_filter`, `array_column`, `usort`, `array_key_exists`. Стрелочные функции `fn($x) => $x * 2` захватывают внешние переменные автоматически.
+Массивы передаются в функции по значению (копия при изменении). Чтобы изменить исходный массив, нужен `&`.
+```php
+$orders = [
+    ['id' => 1, 'total' => 120, 'paid' => true],
+    ['id' => 2, 'total' => 80,  'paid' => false],
+    ['id' => 3, 'total' => 200, 'paid' => true],
+];
+
+$paid = array_filter($orders, fn($o) => $o['paid']);
+$revenue = array_sum(array_column($paid, 'total'));     // 320
+$ids = array_map(fn($o) => $o['id'], $orders);          // [1, 2, 3]
+
+usort($orders, fn($a, $b) => $b['total'] <=> $a['total']);
+echo $orders[0]['id'];                                   // 3
+
+foreach (['a' => 1, 'b' => 2] as $key => $value) {
+    echo "$key=$value ";
+}
+```
+! array_filter сохраняет ключи — для списка вызовите array_values
+! Оператор `<=>` (spaceship) удобен для сортировки
+! usort меняет массив по ссылке и возвращает bool
+? out Что выведет код?
+```php
+$a = [1, 2, 3];
+$b = $a;
+$b[] = 4;
+echo count($a);
+```
+> 3
+= Массивы копируются по значению.
+? out Что выведет код?
+```php
+print_r(array_values(array_filter([1, 2, 3, 4], fn($x) => $x % 2 === 0)));
+```
+> Array ( [0] => 2 [1] => 4 )
+> Array([0]=>2[1]=>4)
+= array_values переиндексирует массив.
+? fill Впишите оператор сравнения, который возвращает -1, 0 или 1.
+```php
+usort($list, fn($a, $b) => $a ___ $b);
+```
+> <=>
+= Spaceship-оператор.
+? mc Как изменить массив внутри функции так, чтобы изменения были видны снаружи?
++ Передать его по ссылке через &
+- Объявить global внутри
+- Вернуть void
+- Никак
+= function add(array &$list).
+
+@lesson ООП в PHP
+Классы поддерживают типизированные свойства, модификаторы `public`, `protected`, `private` и `readonly`. Промоушен в конструкторе объявляет и заполняет свойства в одной строке.
+Интерфейсы задают контракт, абстрактные классы — общую основу, трейты (`trait`) переиспользуют код в нескольких классах. `enum` (PHP 8.1) описывает фиксированный набор значений.
+Классы загружаются автоматически через автозагрузку Composer по стандарту PSR-4: пространство имён соответствует папке.
+```php
+<?php
+namespace App\Models;
+
+enum Status: string {
+    case Draft = 'draft';
+    case Published = 'published';
+}
+
+interface HasSlug { public function slug(): string; }
+
+final class Post implements HasSlug {
+    public function __construct(
+        public readonly int $id,
+        public readonly string $title,
+        private Status $status = Status::Draft,
+    ) {}
+
+    public function publish(): void { $this->status = Status::Published; }
+    public function slug(): string {
+        return strtolower(str_replace(' ', '-', $this->title));
+    }
+}
+
+$post = new Post(1, 'Hello World');
+echo $post->slug();        // hello-world
+```
+! readonly свойства нельзя изменить после инициализации
+! Пространства имён + PSR-4 = порядок в проекте
+! enum безопаснее строковых констант
+? mc Что делает промоушен свойств в конструкторе?
++ Объявляет и присваивает свойства прямо в параметрах конструктора
+- Делает свойства статическими
+- Повышает видимость до public
+- Наследует свойства родителя
+= Экономит шаблонный код.
+? fill Впишите модификатор свойства, которое нельзя изменить после создания.
+```php
+public ___ string $email;
+```
+> readonly
+= Появился в PHP 8.1.
+? mc Что такое trait?
++ Набор методов, которые можно подключить в разные классы
+- Интерфейс
+- Абстрактный класс
+- Пространство имён
+= Подключается через use внутри класса.
+? out Что выведет код?
+```php
+enum Size: string { case S = 'small'; case L = 'large'; }
+echo Size::from('large')->name;
+```
+> L
+= from находит вариант по значению, name — имя варианта.
+
+@lesson HTTP, формы и безопасность
+PHP получает данные запроса через `$_GET`, `$_POST`, `$_SERVER`, загрузки — через `$_FILES`. Сессии (`session_start()`, `$_SESSION`) хранят данные между запросами.
+Любые входные данные — недоверенные. Выводя их в HTML, экранируйте через `htmlspecialchars`, иначе возможен XSS. Формы защищают CSRF-токеном.
+Пароли храните только как хэш: `password_hash` и `password_verify`. Никогда не используйте md5 или sha1 для паролей.
+```php
+<?php
+session_start();
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (!hash_equals($_SESSION['csrf'] ?? '', $_POST['csrf'] ?? '')) {
+        http_response_code(419);
+        exit('Неверный токен');
+    }
+    $email = filter_input(INPUT_POST, 'email', FILTER_VALIDATE_EMAIL);
+    if ($email === false || $email === null) {
+        exit('Некорректный email');
+    }
+    $hash = password_hash($_POST['password'], PASSWORD_DEFAULT);
+}
+
+$_SESSION['csrf'] ??= bin2hex(random_bytes(32));
+$q = $_GET['q'] ?? '';
+echo 'Вы искали: ' . htmlspecialchars($q, ENT_QUOTES, 'UTF-8');
+```
+! htmlspecialchars на любой вывод пользовательских данных
+! password_hash сам добавляет соль
+! Используйте hash_equals для сравнения токенов
+? mc Чем хранить пароли?
+- md5
+- sha1
++ password_hash
+- base64_encode
+= password_hash использует bcrypt или argon2 с солью.
+? fill Впишите функцию экранирования HTML.
+```php
+echo ___($comment, ENT_QUOTES, 'UTF-8');
+```
+> htmlspecialchars
+= Защищает от XSS.
+? mc От чего защищает CSRF-токен?
++ От отправки формы с чужого сайта от имени пользователя
+- От SQL-инъекций
+- От перебора паролей
+- От XSS
+= Злоумышленник не знает токен сессии.
+? mc Какая функция проверяет пароль против хэша?
++ password_verify
+- password_check
+- hash_equals
+- crypt_compare
+= Она извлекает соль из хэша сама.
+
+@lesson Базы данных и PDO
+PDO — единый интерфейс к разным СУБД. Подготовленные запросы (`prepare` + `execute`) передают значения отдельно от SQL и полностью защищают от SQL-инъекций.
+Включайте режим исключений `PDO::ERRMODE_EXCEPTION`, чтобы ошибки базы не терялись. Связанные изменения объединяйте в транзакцию.
+В Laravel эту работу берут на себя Eloquent ORM и Query Builder, но понимать PDO и SQL всё равно нужно.
+```php
+$pdo = new PDO('pgsql:host=localhost;dbname=blog', 'user', 'secret', [
+    PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+    PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+]);
+
+$stmt = $pdo->prepare('SELECT id, title FROM posts WHERE author_id = :author AND status = :status');
+$stmt->execute(['author' => $authorId, 'status' => 'published']);
+$posts = $stmt->fetchAll();
+
+$pdo->beginTransaction();
+try {
+    $pdo->prepare('UPDATE accounts SET balance = balance - ? WHERE id = ?')->execute([100, 1]);
+    $pdo->prepare('UPDATE accounts SET balance = balance + ? WHERE id = ?')->execute([100, 2]);
+    $pdo->commit();
+} catch (Throwable $e) {
+    $pdo->rollBack();
+    throw $e;
+}
+```
+! Никогда не вставляйте переменные в SQL через конкатенацию
+! ERRMODE_EXCEPTION — обязательная настройка
+! При ошибке в транзакции вызывайте rollBack
+? mc Что защищает от SQL-инъекций в PDO?
++ Подготовленные запросы с параметрами
+- addslashes
+- Проверка длины строки
+- Режим FETCH_ASSOC
+= Значения передаются отдельно от SQL.
+? fill Впишите метод PDO для подготовки запроса.
+```php
+$stmt = $pdo->___('SELECT * FROM users WHERE id = ?');
+```
+> prepare
+= Затем execute с параметрами.
+? mc Что делает PDO::FETCH_ASSOC?
++ Возвращает строки как ассоциативные массивы по именам столбцов
+- Возвращает объекты
+- Возвращает только первый столбец
+- Кэширует запрос
+= Ключи — имена столбцов.
+? mc Что вызвать при исключении внутри транзакции?
++ rollBack()
+- commit()
+- close()
+- Ничего
+= Изменения транзакции отменятся.
+
+@lesson Composer и экосистема
+Composer — менеджер зависимостей PHP. `composer require vendor/package` добавляет пакет, `composer.json` описывает зависимости, `composer.lock` фиксирует точные версии.
+Автозагрузка PSR-4 подключает классы по пространствам имён без ручных require. Стандарты PSR описывают стиль кода (PSR-12), логирование, HTTP-сообщения.
+Инструменты качества: PHPStan или Psalm для статического анализа, PHP-CS-Fixer для стиля, PHPUnit или Pest для тестов.
+```php
+// composer.json
+// {
+//   "require": { "php": "^8.3", "guzzlehttp/guzzle": "^7.8" },
+//   "require-dev": { "phpunit/phpunit": "^11.0" },
+//   "autoload": { "psr-4": { "App\\": "src/" } }
+// }
+
+require __DIR__ . '/vendor/autoload.php';
+
+use App\Services\Weather;
+use GuzzleHttp\Client;
+
+$weather = new Weather(new Client(['timeout' => 5]));
+echo $weather->today('Almaty');
+
+// composer install          — поставить по lock-файлу
+// vendor/bin/phpunit        — тесты
+// vendor/bin/phpstan analyse src --level=8
+```
+! composer.lock коммитят в репозиторий приложения
+! Папку vendor/ не коммитят
+! PHPStan на высоком уровне ловит баги до запуска
+? mc Зачем composer.lock?
++ Фиксирует точные версии зависимостей для одинаковой установки у всех
+- Хранит пароли
+- Ускоряет PHP
+- Заменяет composer.json
+= composer install ставит версии из lock.
+? fill Впишите стандарт автозагрузки по пространствам имён.
+```php
+"autoload": { "psr-___": { "App\\": "src/" } }
+```
+> 4
+= PSR-4.
+? mc Что не нужно коммитить в Git?
++ vendor/
+- composer.json
+- composer.lock
+- src/
+= Зависимости ставятся из lock-файла.
+? mc Что делает PHPStan?
++ Статически анализирует код и находит ошибки типов без запуска
+- Запускает тесты
+- Форматирует код
+- Устанавливает пакеты
+= Уровни строгости от 0 до максимального.
+
+@lesson Laravel: основы фреймворка
+Laravel — самый популярный PHP-фреймворк. Маршруты в `routes/web.php` и `routes/api.php` ведут к контроллерам. Шаблоны пишут на Blade, данные — через Eloquent ORM.
+Миграции описывают схему базы в коде, `php artisan migrate` применяет их. Валидация запросов — `$request->validate([...])` или Form Request классы.
+Middleware обрабатывает запрос до контроллера: `auth` проверяет вход. Очереди (`dispatch`) выносят долгие задачи, например отправку писем, в фон.
+```php
+// routes/web.php
+Route::middleware('auth')->group(function () {
+    Route::resource('posts', PostController::class);
+});
+
+// app/Http/Controllers/PostController.php
+public function store(Request $request)
+{
+    $data = $request->validate([
+        'title' => ['required', 'string', 'max:200'],
+        'body'  => ['required', 'string'],
+    ]);
+    $post = $request->user()->posts()->create($data);
+    return redirect()->route('posts.show', $post);
+}
+
+// Eloquent
+$latest = Post::with('author')->where('status', 'published')->latest()->paginate(10);
+
+// php artisan make:model Post -mcr
+// php artisan migrate
+```
+! with() подгружает связи одним запросом и решает N+1
+! Поля для массового заполнения перечисляют в $fillable
+! Секреты держат в .env, его не коммитят
+? mc Что решает `Post::with('author')`?
++ Проблему N+1, загружая авторов одним дополнительным запросом
+- Создаёт автора
+- Фильтрует посты по автору
+- Кэширует посты
+= Это жадная загрузка связей.
+? fill Впишите команду применения миграций.
+```php
+// php artisan ___
+```
+> migrate
+= Откат — migrate:rollback.
+? mc Где хранить пароль от базы в Laravel?
++ В файле .env, который не попадает в Git
+- В routes/web.php
+- В контроллере
+- В README
+= config читает значения через env().
+? mc Что делает middleware auth?
++ Пропускает к маршруту только вошедших пользователей
+- Шифрует запрос
+- Логирует запрос
+- Кэширует ответ
+= Остальных перенаправляет на вход.
+
+@lesson Тестирование и деплой
+Тесты бывают юнит (одна функция или класс) и feature (HTTP-запрос через всё приложение). В Laravel feature-тест отправляет запрос и проверяет ответ и базу.
+Для тестов используют отдельную базу и `RefreshDatabase`, а данные создают фабриками. Внешние сервисы подменяют фейками: `Mail::fake()`, `Http::fake()`.
+Деплой: `composer install --no-dev --optimize-autoloader`, `php artisan migrate --force`, кэширование конфигурации и маршрутов. Ошибки в продакшене не показывают пользователю: `APP_DEBUG=false`.
+```php
+use Illuminate\Foundation\Testing\RefreshDatabase;
+
+class PostTest extends TestCase
+{
+    use RefreshDatabase;
+
+    public function test_author_can_create_post(): void
+    {
+        $user = User::factory()->create();
+
+        $response = $this->actingAs($user)->post('/posts', [
+            'title' => 'Первый пост',
+            'body'  => 'Текст',
+        ]);
+
+        $response->assertRedirect();
+        $this->assertDatabaseHas('posts', ['title' => 'Первый пост']);
+    }
+
+    public function test_guest_is_redirected(): void
+    {
+        $this->post('/posts', [])->assertRedirect('/login');
+    }
+}
+```
+! APP_DEBUG=true в продакшене раскроет секреты
+! Фабрики делают тестовые данные короткими и читаемыми
+! Тестируйте и успешные, и запрещённые сценарии
+? mc Что проверяет feature-тест в Laravel?
++ Работу маршрута целиком: запрос, контроллер, база, ответ
+- Только одну функцию
+- Скорость сервера
+- Вёрстку страницы
+= Он ближе к реальному использованию.
+? fill Впишите трейт, который пересоздаёт базу для каждого теста.
+```php
+use ___;
+```
+> RefreshDatabase
+= Тесты не влияют друг на друга.
+? mc Какое значение APP_DEBUG должно быть в продакшене?
++ false
+- true
+- 1
+- debug
+= Иначе пользователь увидит стек ошибок и конфигурацию.
+? mc Как в тесте не отправлять настоящие письма?
++ Mail::fake()
+- Отключить интернет
+- Удалить почтовый класс
+- APP_ENV=mail
+= Фейк записывает отправленные письма для проверок.
+
+@exam
+? out Что выведет код?
+```php
+$a = ['x' => 1];
+$b = &$a;
+$b['x'] = 2;
+echo $a['x'];
+```
+> 2
+= $b — ссылка на тот же массив.
+? out Что выведет код?
+```php
+echo intdiv(7, 2), 7 % 2, 7 / 2;
+```
+> 313.5
+= intdiv даёт 3, остаток 1, деление 3.5.
+? out Что выведет код?
+```php
+$s = 'abc';
+echo strlen($s) . strtoupper($s[0]) . str_repeat('-', 2);
+```
+> 3A--
+= Длина 3, первая буква в верхнем регистре, два дефиса.
+? out Что выведет код?
+```php
+var_dump(null ?? false ?? 'x');
+```
+> bool(false)
+= ?? проверяет только null, false — не null.
+? out Что выведет код?
+```php
+$arr = [3 => 'a'];
+$arr[] = 'b';
+echo implode(',', array_keys($arr));
+```
+> 3,4
+= Новый ключ — максимальный числовой плюс один.
+? mc Что вернёт `array_search('1', [0, 1, 2])`?
+- '1'
++ 1
+- true
+- false
+= Нестрогое сравнение находит 1 по индексу 1.
+? fill Впишите функцию, превращающую массив в JSON.
+```php
+echo ___(['a' => 1]);
+```
+> json_encode
+= json_decode — обратное преобразование.
+? mc Чем `include` отличается от `require` при отсутствии файла?
++ include выдаст предупреждение и продолжит, require — фатальную ошибку
+- Ничем
+- require выдаст предупреждение
+- include не работает с путями
+= Для обязательных файлов используйте require_once.
+? out Что выведет код?
+```php
+function f(int ...$n): int { return array_sum($n); }
+echo f(1, 2, 3);
+```
+> 6
+= Variadic-параметр собирает аргументы в массив.
+? mc Что вернёт `match(true) { 5 > 3 => 'a', default => 'b' }`?
++ 'a'
+- 'b'
+- true
+- Ошибку
+= match сравнивает строго и возвращает первое совпадение.
+? mc Где в Laravel логично проверять, может ли пользователь редактировать пост?
++ В политике (Policy) через authorize
+- В Blade-шаблоне
+- В миграции
+- В .env
+= Правила доступа держат в одном месте.
+? out Что выведет код?
+```php
+$x = '5 apples';
+var_dump((int) $x);
+```
+> int(5)
+= Приведение берёт ведущие цифры.

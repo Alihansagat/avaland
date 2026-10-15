@@ -1,0 +1,459 @@
+@lang id=sql name=SQL land=Долина данных color=#4c9a8a
+@about Язык баз данных. Нужен почти каждому разработчику: бэкенд, аналитика, отчёты.
+@project База интернет-магазина
+Спроектировать и наполнить базу PostgreSQL для небольшого магазина и написать аналитические запросы.
+- Таблицы customers, products, orders, order_items с первичными и внешними ключами
+- Ограничения NOT NULL, UNIQUE, CHECK (цена больше нуля)
+- Скрипт с тестовыми данными: минимум 50 заказов
+- 10 запросов: выручка по месяцам, топ-5 товаров, клиенты без заказов, средний чек и другие
+- Индексы под самые частые запросы и объяснение через EXPLAIN
+- Всё в репозитории: schema.sql, seed.sql, queries.sql и README
+
+@lesson SELECT, WHERE и сортировка
+SQL описывает, какие данные нужны, а не как их достать. `SELECT` выбирает столбцы, `FROM` — таблицу, `WHERE` фильтрует строки, `ORDER BY` сортирует, `LIMIT` ограничивает количество.
+Условия объединяют через `AND`, `OR`, `NOT`. Удобные операторы: `BETWEEN`, `IN (...)`, `LIKE 'A%'` для поиска по шаблону.
+`NULL` означает «значение неизвестно». Сравнение с NULL через `=` всегда даёт неизвестность, поэтому проверяют `IS NULL` и `IS NOT NULL`.
+```code
+SELECT name, price
+FROM products
+WHERE price BETWEEN 1000 AND 5000
+  AND category IN ('watches', 'bags')
+  AND name LIKE 'P%'
+ORDER BY price DESC
+LIMIT 10;
+
+SELECT * FROM customers WHERE phone IS NULL;
+```
+! `WHERE phone = NULL` никогда ничего не найдёт
+! Не пишите SELECT * в продакшен-коде: перечисляйте столбцы
+! Строки в SQL — в одинарных кавычках
+? mc Как найти строки, где email не заполнен?
+- WHERE email = NULL
++ WHERE email IS NULL
+- WHERE email == ''
+- WHERE NOT email
+= Сравнение с NULL через = даёт UNKNOWN.
+? mc Что найдёт `LIKE '%son'`?
+- Строки, начинающиеся на son
++ Строки, заканчивающиеся на son
+- Строки ровно из трёх букв
+- Только слово son
+= % — любое количество любых символов.
+? fill Впишите ключевое слово сортировки по убыванию.
+```code
+SELECT * FROM orders ORDER BY total ___;
+```
+> DESC
+> desc
+= ASC — по возрастанию, это значение по умолчанию.
+? mc Включает ли `BETWEEN 10 AND 20` границы?
++ Да, обе
+- Нет
+- Только 10
+- Только 20
+= BETWEEN эквивалентен >= 10 AND <= 20.
+
+@lesson Агрегации и GROUP BY
+Агрегатные функции считают по группе строк: `COUNT`, `SUM`, `AVG`, `MIN`, `MAX`. `COUNT(*)` считает строки, `COUNT(column)` — только непустые значения.
+`GROUP BY` разбивает строки на группы. В SELECT можно выводить только столбцы группировки и агрегаты.
+`WHERE` фильтрует строки до группировки, `HAVING` — группы после неё. Порядок выполнения: FROM → WHERE → GROUP BY → HAVING → SELECT → ORDER BY → LIMIT.
+```code
+SELECT customer_id,
+       COUNT(*)        AS orders_count,
+       SUM(total)      AS revenue,
+       ROUND(AVG(total), 2) AS avg_check
+FROM orders
+WHERE status = 'paid'
+GROUP BY customer_id
+HAVING SUM(total) > 50000
+ORDER BY revenue DESC;
+```
+! Условие на агрегат пишут в HAVING, а не в WHERE
+! COUNT(column) игнорирует NULL
+! Псевдоним из SELECT нельзя использовать в WHERE того же запроса
+? mc Где фильтровать группы по `SUM(total) > 1000`?
+- WHERE
++ HAVING
+- ORDER BY
+- GROUP BY
+= WHERE работает до агрегации.
+? out Таблица t(x) содержит значения 1, NULL, 3. Что вернёт запрос?
+```code
+SELECT COUNT(*), COUNT(x) FROM t;
+```
+> 3 2
+> 3, 2
+> 3|2
+= COUNT(x) не считает NULL.
+? mc Что выполняется раньше: WHERE или GROUP BY?
++ WHERE
+- GROUP BY
+- Одновременно
+- Зависит от СУБД
+= Сначала фильтруются строки, потом группируются.
+? fill Впишите функцию среднего значения.
+```code
+SELECT ___(price) FROM products;
+```
+> AVG
+> avg
+= AVG считает среднее, игнорируя NULL.
+
+@lesson JOIN
+Данные хранят в разных таблицах и связывают ключами. `JOIN` объединяет строки по условию `ON`.
+`INNER JOIN` оставляет только совпавшие строки. `LEFT JOIN` — все строки левой таблицы, а у несовпавших поля правой будут NULL. Так ищут, например, клиентов без заказов.
+Таблицам дают короткие псевдонимы. Если условие JOIN не указано или неверно, получится декартово произведение — каждая строка с каждой.
+```code
+SELECT c.name, o.id, o.total
+FROM customers c
+JOIN orders o ON o.customer_id = c.id
+WHERE o.created_at >= '2026-01-01';
+
+-- клиенты без заказов
+SELECT c.name
+FROM customers c
+LEFT JOIN orders o ON o.customer_id = c.id
+WHERE o.id IS NULL;
+```
+! LEFT JOIN + WHERE право.id IS NULL — классический поиск «без пары»
+! Условие на правую таблицу в WHERE превращает LEFT JOIN в INNER
+! JOIN по неиндексированному столбцу медленный на больших таблицах
+? mc Какой JOIN вернёт всех клиентов, включая тех, у кого нет заказов?
+- INNER JOIN
++ LEFT JOIN customers → orders
+- CROSS JOIN
+- RIGHT JOIN customers → orders
+= LEFT сохраняет все строки левой таблицы.
+? out В A 3 строки, в B 4 строки. Сколько строк вернёт запрос?
+```code
+SELECT * FROM A CROSS JOIN B;
+```
+> 12
+= Каждая строка с каждой: 3 × 4.
+? fill Впишите ключевое слово условия соединения.
+```code
+SELECT * FROM orders o JOIN customers c ___ c.id = o.customer_id;
+```
+> ON
+> on
+= ON задаёт условие соединения.
+? mc Что будет в полях правой таблицы у строк без пары при LEFT JOIN?
+- 0
+- Пустая строка
++ NULL
+- Строка не попадёт в результат
+= Отсутствующие значения заполняются NULL.
+
+@lesson Изменение данных и транзакции
+`INSERT` добавляет строки, `UPDATE` меняет, `DELETE` удаляет. UPDATE и DELETE без WHERE затронут всю таблицу — перед запуском проверьте условие через SELECT.
+Транзакция объединяет несколько операций в одно целое: либо выполняются все (`COMMIT`), либо ни одна (`ROLLBACK`). Это свойства ACID: атомарность, согласованность, изоляция, долговечность.
+Перевод денег — классический пример: списание и зачисление должны пройти вместе.
+```code
+INSERT INTO products (name, price) VALUES ('Poedagar 615', 18990);
+
+UPDATE products SET price = price * 0.9 WHERE category = 'sale';
+
+BEGIN;
+UPDATE accounts SET balance = balance - 5000 WHERE id = 1;
+UPDATE accounts SET balance = balance + 5000 WHERE id = 2;
+COMMIT;
+```
+! Сначала SELECT с тем же WHERE, потом UPDATE или DELETE
+! Значения из пользовательского ввода передавайте параметрами, а не склейкой строк
+! Буква A в ACID — атомарность: всё или ничего
+? mc Что сделает `DELETE FROM users;`?
+- Удалит таблицу
++ Удалит все строки таблицы
+- Выдаст ошибку без WHERE
+- Ничего
+= Таблица останется пустой. Удаление самой таблицы — DROP TABLE.
+? mc Что означает атомарность транзакции?
++ Все операции выполняются целиком или не выполняется ни одна
+- Транзакция выполняется быстро
+- Транзакция видна всем сразу
+- Данные сохраняются на диск
+= Это буква A в ACID.
+? fill Впишите команду отмены транзакции.
+```code
+BEGIN;
+DELETE FROM orders WHERE id = 7;
+___;
+```
+> ROLLBACK
+> rollback
+= ROLLBACK откатывает все изменения транзакции.
+? mc Как защититься от SQL-инъекций?
+- Экранировать кавычки вручную
++ Использовать параметризованные запросы
+- Запрещать пробелы во вводе
+- Хранить запросы в файле
+= Параметры передаются отдельно от текста запроса.
+
+@lesson Проектирование таблиц
+Первичный ключ `PRIMARY KEY` уникально определяет строку. Внешний ключ `FOREIGN KEY` ссылается на строку другой таблицы и не даёт создать «висящую» ссылку.
+Ограничения защищают данные: `NOT NULL`, `UNIQUE`, `CHECK (price > 0)`, `DEFAULT`. Лучше, чтобы неверные данные не попали в базу совсем.
+Нормализация убирает дублирование: данные клиента хранятся в одной таблице, а заказ ссылается на неё по id. Связь «многие ко многим» (заказы и товары) делают через промежуточную таблицу.
+```code
+CREATE TABLE customers (
+  id         SERIAL PRIMARY KEY,
+  email      TEXT NOT NULL UNIQUE,
+  created_at TIMESTAMP NOT NULL DEFAULT now()
+);
+
+CREATE TABLE orders (
+  id          SERIAL PRIMARY KEY,
+  customer_id INT NOT NULL REFERENCES customers(id),
+  total       NUMERIC(10, 2) NOT NULL CHECK (total >= 0)
+);
+
+CREATE TABLE order_items (
+  order_id   INT REFERENCES orders(id) ON DELETE CASCADE,
+  product_id INT REFERENCES products(id),
+  qty        INT NOT NULL CHECK (qty > 0),
+  PRIMARY KEY (order_id, product_id)
+);
+```
+! Деньги храните в NUMERIC, а не во FLOAT
+! Связь многие-ко-многим всегда через промежуточную таблицу
+! ON DELETE CASCADE удалит связанные строки вместе с родителем
+? mc Как реализовать связь «многие ко многим» между заказами и товарами?
+- Массив id товаров в заказе
+- Внешний ключ в products на orders
++ Промежуточная таблица order_items
+- Дублировать товары в заказах
+= Каждая строка связывает один заказ с одним товаром.
+? mc Какой тип лучше для денег?
+- FLOAT
++ NUMERIC(10, 2)
+- TEXT
+- REAL
+= Плавающая точка даёт ошибки округления.
+? fill Впишите ограничение, запрещающее повторяющиеся значения.
+```code
+email TEXT NOT NULL ___
+```
+> UNIQUE
+> unique
+= UNIQUE создаёт уникальный индекс.
+? mc Что делает FOREIGN KEY?
++ Не даёт сослаться на несуществующую строку другой таблицы
+- Ускоряет любые запросы
+- Шифрует столбец
+- Делает столбец уникальным
+= Это ссылочная целостность.
+
+@lesson Подзапросы и CTE
+Подзапрос — запрос внутри запроса. Его используют в `WHERE ... IN (SELECT ...)`, в `FROM` как временную таблицу или как одно значение.
+`EXISTS` проверяет, есть ли хоть одна строка, и останавливается на первой находке. Часто это быстрее, чем `IN` по большой выборке.
+CTE (`WITH имя AS (...)`) даёт подзапросу имя и делает сложный запрос читаемым по шагам.
+```code
+SELECT name FROM products
+WHERE price > (SELECT AVG(price) FROM products);
+
+WITH monthly AS (
+  SELECT date_trunc('month', created_at) AS month,
+         SUM(total) AS revenue
+  FROM orders
+  GROUP BY 1
+)
+SELECT month, revenue
+FROM monthly
+WHERE revenue > 1000000
+ORDER BY month;
+
+SELECT c.name FROM customers c
+WHERE EXISTS (SELECT 1 FROM orders o WHERE o.customer_id = c.id);
+```
+! NOT IN с подзапросом, где есть NULL, вернёт пустой результат
+! CTE разбивает сложную логику на понятные шаги
+! Коррелированный подзапрос выполняется для каждой строки внешнего запроса
+? mc Какое ключевое слово задаёт CTE?
+- CTE
++ WITH
+- AS
+- TEMP
+= WITH имя AS (запрос).
+? mc Что проверяет EXISTS?
+- Что столбец не NULL
++ Что подзапрос вернул хотя бы одну строку
+- Что таблица существует
+- Что значение уникально
+= Возвращает true или false.
+? fill Впишите оператор: цена выше средней.
+```code
+WHERE price ___ (SELECT AVG(price) FROM products)
+```
+> >
+= Скалярный подзапрос возвращает одно значение.
+? mc Почему `NOT IN (подзапрос)` опасен, если подзапрос возвращает NULL?
++ Условие станет неизвестным и запрос не вернёт строк
+- Запрос упадёт с ошибкой
+- NULL будет проигнорирован
+- Запрос станет медленнее
+= Используйте NOT EXISTS.
+
+@lesson Оконные функции
+Оконная функция считает значение по набору строк, но не схлопывает их, как GROUP BY. Синтаксис: `функция() OVER (PARTITION BY ... ORDER BY ...)`.
+`ROW_NUMBER` нумерует строки, `RANK` даёт одинаковый ранг равным значениям с пропусками, `DENSE_RANK` — без пропусков. `LAG` и `LEAD` берут значение из предыдущей или следующей строки.
+Агрегат с ORDER BY в окне даёт нарастающий итог. Типичные задачи: топ-N в каждой категории, рост выручки к прошлому месяцу, накопительная сумма.
+```code
+SELECT name, category, price,
+       ROW_NUMBER() OVER (PARTITION BY category ORDER BY price DESC) AS rn
+FROM products;
+
+WITH m AS (
+  SELECT date_trunc('month', created_at) AS month, SUM(total) AS rev
+  FROM orders GROUP BY 1
+)
+SELECT month, rev,
+       rev - LAG(rev) OVER (ORDER BY month) AS growth,
+       SUM(rev) OVER (ORDER BY month)       AS running_total
+FROM m;
+```
+! Отфильтровать по rn = 1 можно только во внешнем запросе или CTE
+! PARTITION BY — это «группа» для окна
+! LAG у первой строки вернёт NULL
+? mc Чем оконная функция отличается от GROUP BY?
++ Не уменьшает количество строк
+- Работает только с числами
+- Не поддерживает сортировку
+- Быстрее всегда
+= Каждая строка получает своё вычисленное значение.
+? out Значения цен: 100, 100, 90. Какие ранги даст RANK() OVER (ORDER BY price DESC)?
+> 1 1 3
+> 1, 1, 3
+= RANK пропускает номер после одинаковых значений.
+? fill Впишите функцию, которая берёт значение предыдущей строки.
+```code
+SELECT rev - ___(rev) OVER (ORDER BY month) FROM m;
+```
+> LAG
+> lag
+= LEAD берёт следующую строку.
+? mc Как получить самый дорогой товар в каждой категории?
+- GROUP BY category с ORDER BY price
++ ROW_NUMBER() по категории и фильтр rn = 1 во внешнем запросе
+- DISTINCT category
+- HAVING MAX(price)
+= Это классическая задача топ-N.
+
+@lesson Индексы и производительность
+Индекс — отдельная структура (обычно B-дерево), которая ускоряет поиск по столбцу так же, как алфавитный указатель в книге. Без индекса база читает всю таблицу.
+Индексы ускоряют SELECT, но замедляют INSERT и UPDATE и занимают место. Создавайте их под реальные запросы: столбцы в WHERE, JOIN и ORDER BY.
+`EXPLAIN ANALYZE` показывает план выполнения. Seq Scan на большой таблице в частом запросе — повод подумать об индексе. Составной индекс `(a, b)` работает для условий по a и по a+b, но не по одному b.
+```code
+CREATE INDEX idx_orders_customer ON orders (customer_id);
+CREATE INDEX idx_orders_cust_date ON orders (customer_id, created_at);
+
+EXPLAIN ANALYZE
+SELECT * FROM orders
+WHERE customer_id = 42
+ORDER BY created_at DESC
+LIMIT 20;
+
+-- функция над столбцом мешает индексу:
+-- WHERE lower(email) = 'a@b.kz'  → нужен индекс по lower(email)
+```
+! Первичный ключ и UNIQUE индексируются автоматически
+! Внешние ключи в PostgreSQL сами не индексируются
+! Функция над столбцом в WHERE отключает обычный индекс
+? mc Что замедляет каждый лишний индекс?
+- SELECT
++ INSERT и UPDATE
+- Только DELETE
+- Ничего
+= При записи нужно обновлять все индексы.
+? mc Поможет ли индекс (a, b) запросу `WHERE b = 5`?
+- Да, всегда
++ Обычно нет: используется левая часть индекса
+- Только если b уникален
+- Только с LIMIT
+= Составной индекс работает по префиксу.
+? fill Впишите команду, которая показывает план выполнения запроса.
+```code
+___ SELECT * FROM orders WHERE id = 1;
+```
+> EXPLAIN
+> EXPLAIN ANALYZE
+> explain
+= EXPLAIN ANALYZE ещё и выполняет запрос.
+? mc Что значит Seq Scan в плане?
++ Полное чтение таблицы
+- Поиск по индексу
+- Сортировка
+- Соединение таблиц
+= На больших таблицах это медленно.
+
+@exam
+? out Таблица t(x): 1, 2, NULL. Что вернёт запрос?
+```code
+SELECT SUM(x), AVG(x) FROM t;
+```
+> 3 1.5
+> 3, 1.5
+= Агрегаты игнорируют NULL: среднее по двум значениям.
+? out Таблица t(x): 1, 2, 2, 3. Что вернёт запрос?
+```code
+SELECT COUNT(DISTINCT x) FROM t;
+```
+> 3
+= Уникальные значения: 1, 2, 3.
+? mc Что вернёт `SELECT NULL = NULL`?
+- true
+- false
++ NULL
+- Ошибку
+= Сравнение с неизвестным даёт неизвестность.
+? out В A 3 строки с id 1, 2, 3. В B 2 строки с a_id 1 и 1. Сколько строк даст запрос?
+```code
+SELECT * FROM A LEFT JOIN B ON B.a_id = A.id;
+```
+> 4
+= id 1 совпадает дважды, id 2 и 3 — по одной строке с NULL.
+? mc В каком порядке логически выполняются части запроса?
+- SELECT → FROM → WHERE → GROUP BY
++ FROM → WHERE → GROUP BY → HAVING → SELECT → ORDER BY
+- FROM → SELECT → WHERE → ORDER BY
+- WHERE → FROM → SELECT → GROUP BY
+= Поэтому псевдоним из SELECT нельзя использовать в WHERE.
+? out Цены 50, 50, 40. Какие значения даст DENSE_RANK() OVER (ORDER BY price DESC)?
+> 1 1 2
+> 1, 1, 2
+= DENSE_RANK не делает пропусков.
+? fill Впишите ключевое слово, удаляющее дубликаты строк из результата.
+```code
+SELECT ___ city FROM customers;
+```
+> DISTINCT
+> distinct
+= DISTINCT оставляет уникальные строки.
+? mc Чем UNION отличается от UNION ALL?
++ UNION убирает дубликаты, UNION ALL — нет
+- UNION ALL сортирует результат
+- Ничем
+- UNION работает только с двумя таблицами
+= UNION ALL быстрее, если дубликаты не мешают.
+? mc Какой уровень изоляции в PostgreSQL по умолчанию?
+- Read Uncommitted
++ Read Committed
+- Repeatable Read
+- Serializable
+= Транзакция видит только зафиксированные изменения других.
+? mc Почему запрос `WHERE created_at::date = '2026-10-01'` может не использовать индекс по created_at?
++ Преобразование над столбцом мешает использовать обычный индекс
+- Даты нельзя индексировать
+- Нужен LIMIT
+- Индексы не работают с равенством
+= Лучше: created_at >= '2026-10-01' AND created_at < '2026-10-02'.
+? out Что вернёт запрос?
+```code
+SELECT COALESCE(NULL, NULL, 'x', 'y');
+```
+> x
+= COALESCE возвращает первое не NULL значение.
+? mc Что такое N+1 проблема?
+- Таблица без первичного ключа
++ Один запрос за списком и ещё по запросу на каждый элемент
+- Лишний индекс
+- Ошибка нумерации строк
+= Решается JOIN или пакетной загрузкой.
