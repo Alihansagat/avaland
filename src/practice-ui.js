@@ -128,9 +128,9 @@ async function runSqlProblem(all) {
   if (!all) { out.innerHTML = `<div class="verdict ok"><b>Запрос выполнен</b><span>Сверьте результат и нажмите «Отправить».</span></div>${tableHTML(r.cols, r.rows)}`; return; }
   const colsOk = JSON.stringify(r.cols.map(c => c.toLowerCase())) === JSON.stringify(p.cols.map(c => c.toLowerCase()));
   const rowsOk = sameRows(r.rows, p.rows, p.ordered);
-  if (colsOk && rowsOk) { solved(p, "sql"); out.innerHTML = `<div class="verdict ok"><b>Принято</b><span>Результат совпал с эталоном: ${p.rows.length} строк.</span></div>${tableHTML(r.cols, r.rows, 6)}`; return; }
+  if (colsOk && rowsOk) { solved(p, "sql"); out.innerHTML = `<div class="verdict ok"><b>Принято</b><span>Результат совпал с эталоном: ${p.rows.length} ${plural(p.rows.length, "строка", "строки", "строк")}.</span></div>${tableHTML(r.cols, r.rows, 6)}`; return; }
   failTry(p);
-  const why = !colsOk ? `Столбцы должны быть: ${p.cols.join(", ")}. У вас: ${r.cols.join(", ") || "нет"}.` : r.rows.length !== p.rows.length ? `Ожидалось строк: ${p.rows.length}, получено: ${r.rows.length}.` : p.ordered ? "Строки или их порядок не совпадают с ожидаемыми." : "Строки не совпадают с ожидаемыми.";
+  const why = !colsOk ? `Столбцы должны быть: ${p.cols.join(", ")}. У вас: ${r.cols.join(", ") || "нет"}.` : r.rows.length !== p.rows.length ? `Ожидалось строк — ${p.rows.length}, получено — ${r.rows.length}.` : p.ordered ? "Строки или их порядок не совпадают с ожидаемыми." : "Строки не совпадают с ожидаемыми.";
   out.innerHTML = `<div class="verdict no"><b>Не принято</b><span>${esc(why)}</span></div><div class="grid-2col"><div><div class="eyebrow">Ваш результат</div>${tableHTML(r.cols, r.rows, 8)}</div><div><div class="eyebrow">Ожидалось</div>${tableHTML(p.cols, p.rows, 8)}</div></div>`;
 }
 
