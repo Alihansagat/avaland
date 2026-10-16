@@ -59,7 +59,7 @@ function wrapProgram(lang, code) {
   const ind = s => s.split("\n").map(x => x ? "    " + x : x).join("\n");
   switch (lang) {
     case "php": return /^\s*<\?php/.test(code) ? code : "<?php\n" + code;
-    case "swift": return /\b(URL|URLSession|Date|DispatchQueue|JSONDecoder|JSONEncoder|NSString|Data)\b/.test(code) && !/^import\s+Foundation/m.test(code) ? "import Foundation\n\n" + code : code;
+    case "swift": return /\b(URL|URLSession|Date|DispatchQueue|JSONDecoder|JSONEncoder|NSString|Data|localizedDescription|String\(format)\b/.test(code) && !/^import\s+Foundation/m.test(code) ? "import Foundation\n\n" + code : code;
     case "cpp": {
       const pre = /bits\/stdc\+\+/.test(code) ? "" : "#include <bits/stdc++.h>\n";
       if (/\bint\s+main\s*\(/.test(code)) return pre + code;
@@ -200,11 +200,20 @@ async function runRemote(lang, code, stdin) {
     return { compile: j.compiler_error || "", out: j.program_output || "", err: j.program_error || "", code: +j.status || 0 };
   }
   const [id, glang] = GODBOLT[lang];
-  const src = lang === "java" ? code.replace(/public\s+(final\s+)?class\s+Main\b/, "class Main") : code;
+  let src = code;
+  if (lang === "java") {
+    // godbolt runs Java with an ASCII console: switch stdout/stderr to UTF-8 inside the main class (same line, so line numbers stay)
+    const UTF = 'static { try { System.setOut(new java.io.PrintStream(new java.io.FileOutputStream(java.io.FileDescriptor.out), true, "UTF-8")); System.setErr(new java.io.PrintStream(new java.io.FileOutputStream(java.io.FileDescriptor.err), true, "UTF-8")); } catch (Exception e) {} } ';
+    src = src.replace(/public\s+(final\s+)?class\s+(\w+)/, "class $2");
+    src = src.replace(/(class\s+\w+[^{]*\{)(?=[\s\S]*static\s+void\s+main)/, m => m + UTF);
+  }
+  if (lang === "rb") src = 'Encoding.default_external = Encoding::UTF_8; Encoding.default_internal = Encoding::UTF_8; $stdin.set_encoding("UTF-8")\n' + src;
+  const shift = lang === "rb" ? 1 : 0;
+  const fix = t => t.replace(/(?:\/app\/)?(?:<source>|example\.\w+|output\.s)(:(\d+))?/g, (m, a, n) => "main" + (n ? ":" + Math.max(1, +n - shift) : ""));
   const j = await httpJSON(`https://godbolt.org/api/compiler/${id}/compile`, { source: src, options: { userArguments: lang === "cpp" ? "-std=c++20 -O1" : "", executeParameters: { args: [], stdin }, compilerOptions: { executorRequest: true }, filters: { execute: true }, tools: [], libraries: [] }, lang: glang, allowStoreCodeDebug: false });
   const b = j.buildResult || {};
   const compile = b.code ? (lines(b.stderr) || lines(b.stdout) || "Ошибка компиляции") : "";
-  return { compile: compile.replace(/<source>|example\.\w+|\/app\/example\.\w+/g, "main"), out: lines(j.stdout), err: compile ? "" : lines(j.stderr), code: j.code, timeout: !!j.timedOut };
+  return { compile: fix(compile), out: lines(j.stdout), err: compile ? "" : fix(lines(j.stderr)), code: j.code, timeout: !!j.timedOut };
 }
 const unesc = s => s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&");
 
