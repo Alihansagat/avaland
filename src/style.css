@@ -315,3 +315,25 @@ pre.code,.editor,code,.answer .input{font-variant-ligatures:none;font-feature-se
 .tbl th{font-family:var(--mono);font-weight:600;color:var(--muted);background:var(--panel-2)}
 .tbl tr:last-child td{border-bottom:0}
 .grid-2col{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr));gap:10px}
+/* compiler / code editor */
+.edwrap.cm{height:clamp(240px,46vh,560px);background:#07121c}
+.edwrap.cm .cm-editor{height:100%}
+.edwrap.cm .editor{height:100%;min-height:0;resize:none}
+.playbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.select{background:var(--panel-2);border:1px solid var(--line);border-radius:10px;min-height:44px;padding:6px 34px 6px 12px;font-weight:600;appearance:none;-webkit-appearance:none;background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),linear-gradient(135deg,var(--muted) 50%,transparent 50%);background-position:calc(100% - 17px) 50%,calc(100% - 12px) 50%;background-size:5px 5px;background-repeat:no-repeat}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.stdin summary{cursor:pointer;color:var(--muted);font-size:14px;min-height:32px;display:flex;align-items:center}
+.stdin-ta{font-family:var(--mono);margin-top:6px;resize:vertical;min-height:70px}
+.console{display:flex;flex-direction:column;gap:8px}
+.cout{margin:0;background:#07121c;border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-family:var(--mono);font-size:13.5px;line-height:1.5;white-space:pre-wrap;word-break:break-word;max-height:380px;overflow:auto;color:#d6dee5}
+.cout:empty{display:none}
+.cout .err,.cout.err{color:#f2a090}
+.lchip.lang{padding:7px 13px}
+/* account */
+.oauths{display:grid;gap:8px}
+.btn.oauth{justify-content:flex-start;gap:10px;min-height:46px;font-weight:600}
+.btn.oauth small{margin-left:auto;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-weight:500}
+.btn.oauth:disabled{opacity:.55}
+.acc-h{display:flex;align-items:center;gap:10px}
+.ava{width:32px;height:32px;border-radius:50%;border:1px solid var(--line)}
+input[type=password].input,input[type=email].input{font-family:var(--body)}

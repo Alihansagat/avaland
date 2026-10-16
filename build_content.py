@@ -180,6 +180,12 @@ def main(out_path):
     if all_err:
         print("\n".join(all_err)); sys.exit(1)
     data = [langs[i] for i in ORDER]
+    norun_file = ROOT / "content" / "norun.list"
+    norun = {l.strip() for l in norun_file.read_text(encoding="utf-8").splitlines() if l.strip() and not l.startswith("#")} if norun_file.exists() else set()
+    for L in data:
+        for i, les in enumerate(L["lessons"]):
+            if f'{L["id"]}:{i}' in norun:
+                les["run"] = False
     Path(out_path).write_text("window.AVA_CONTENT=" + json.dumps(data, ensure_ascii=False, separators=(",", ":")) + ";\n", encoding="utf-8")
     nl = sum(len(l["lessons"]) for l in data)
     nq = sum(len(x["q"]) for l in data for x in l["lessons"]) + sum(len(l["exam"]) for l in data)

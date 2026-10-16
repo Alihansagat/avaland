@@ -1,0 +1,31 @@
+name: Push reminders
+
+on:
+  schedule:
+    - cron: "7 * * * *"   # every hour; each user gets at most one reminder a day at their chosen local hour
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: backend/push
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci --omit=dev
+        working-directory: backend/push
+      - run: node send.mjs
+        working-directory: backend/push
+        env:
+          SUPABASE_URL: https://wetwpoypjrenlibezsxy.supabase.co
+          SUPABASE_ANON_KEY: ${{ vars.SUPABASE_ANON_KEY }}
+          VAPID_PUBLIC_KEY: ${{ vars.VAPID_PUBLIC_KEY }}
+          PUSH_SECRET: ${{ secrets.PUSH_SECRET }}
+          VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}

@@ -88,7 +88,10 @@ default:
 }
 
 f, err := os.Open("data.txt")
-if err != nil { return err }
+if err != nil {
+    fmt.Println("ошибка:", err) // в функции, которая возвращает error, пишут return err
+    return
+}
 defer f.Close()
 ```
 ! range по строке идёт по рунам, индекс — в байтах

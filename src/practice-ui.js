@@ -151,23 +151,25 @@ function fmtArgs(p, args, lang) { const names = lang === "js" ? p.jsparams : p.p
 
 /* views */
 let pFilter = { diff: "all", open: false };
-function warmPython() {
-  if (pyReady || pyWorker || S.lang === "js") return;
+function warmPython(force) {
+  if (pyReady || pyWorker || (!force && S.lang === "js")) return;
   setTimeout(() => { if (!pyReady && !pyWorker) pyCall({ warm: true }, 90000).then(r => { if (!r.fatal && !r.error) pyReady = true; }); }, 600);
 }
 function viewPractice() {
   warmPython();
+  setTimeout(() => ensureEditor(), 1500);
   const st = practiceStats(), dp = dailyProblem(), L = S.leet;
   const list = PR.filter(p => (pFilter.diff === "all" || p.diff === pFilter.diff) && (!pFilter.open || !isSolved(p.id)));
   const topics = [...new Set(list.map(p => p.topic))];
   const bars = ["easy", "medium", "hard"].map(d => `<div class="pbar"><span>${DIFF[d][0]}</span><div class="bar"><i style="width:${st.by[d][1] ? st.by[d][0] / st.by[d][1] * 100 : 0}%;background:var(--${d === "easy" ? "ok" : d === "medium" ? "gold" : "danger"})"></i></div><b>${st.by[d][0]}/${st.by[d][1]}</b></div>`).join("");
   return `<div class="grid2">
     <section class="card stack"><div><div class="eyebrow">Полигон</div><h2 class="h-sec">${st.solved} из ${st.total} задач решено</h2></div>
-      <p class="muted" style="margin:0">Задачи для собеседований: пишете код на Python, JavaScript или SQL, он запускается прямо в приложении и проверяется на тестах.</p>
+      <p class="muted" style="margin:0">Задачи для собеседований: пишете код на Python, JavaScript или SQL, он запускается прямо в приложении и проверяется на тестах. Для остальных языков есть компилятор ниже.</p>
       <div class="pbars">${bars}</div></section>
     <section class="card stack"><div><div class="eyebrow">Задача дня</div><h2 class="h-sec">${esc(dp.title)}</h2></div>
       <div class="row"><span class="pill ${DIFF[dp.diff][1]}">${DIFF[dp.diff][0]}</span><span class="pill">${esc(dp.topic)}</span>${isSolved(dp.id) ? '<span class="pill ok">решено</span>' : ""}</div>
       <div><button class="btn pri big" data-act="openProb" data-id="${dp.id}">Решать</button></div></section>
+    ${playCardHTML()}
     <section class="card stack"><div><div class="eyebrow">LeetCode</div><h2 class="h-sec">${L && L.user ? esc(L.user) : "Подключите профиль"}</h2></div>${leetCardBody()}</section>
   </div>
   <section class="card stack" style="margin-top:14px">
@@ -208,13 +210,14 @@ function openProblem(id) {
      <p class="txt">${p.text}</p>${ex}<p class="note">Ограничения: ${esc(p.limits)}${p.compare === "unordered" || p.compare === "groups" ? ". Порядок в ответе не важен" : ""}</p>
      <div class="row" style="justify-content:space-between"><div class="seg" role="group" aria-label="Язык">${["py", "js"].map(l => `<button data-act="plang" data-l="${l}" aria-pressed="${lang === l}">${LANG_NAME[l]}</button>`).join("")}</div>
        <button class="btn ghost" data-act="pReset">Сбросить код</button></div>
-     <div class="edwrap"><textarea id="code-ed" class="editor" spellcheck="false" autocapitalize="off" autocorrect="off" autocomplete="off" aria-label="Код решения">${esc(code)}</textarea></div>
-     <div class="keys" aria-label="Символы">${["⇥", "(", ")", "[", "]", "{", "}", ":", "=", "\"", "+", "-", "<", ">", "_", ","].map(k => `<button data-act="ins" data-t="${esc(k)}" tabindex="-1">${esc(k)}</button>`).join("")}</div>
+     <div class="edwrap cm" id="code-ed"></div>
+     ${keyBar(lang)}
      <div class="acts" style="justify-content:flex-start"><button class="btn big" data-act="pRun">Запустить примеры</button><button class="btn pri big" data-act="pSubmit">Отправить</button></div>
      <div id="run-out" aria-live="polite"></div>
      <div class="row"><button class="btn ghost" data-act="pHint">Подсказка</button><button class="btn ghost" data-act="pSol">${isSolved(id) ? "Эталонное решение" : "Показать решение"}</button></div>
      <div id="p-extra"></div>`);
-  openOv("#code-ed");
+  openOv();
+  mountEditor($("#code-ed"), lang, code, saveDraft, () => runProblem(false));
 }
 function openSqlProblem(p) {
   const s = S.practice[p.id] || {};
@@ -224,15 +227,16 @@ function openSqlProblem(p) {
      <p class="txt">${p.text}</p>
      <p class="note">Ожидаемые столбцы: <code>${esc(p.cols.join(", "))}</code>${p.ordered ? "" : ". Порядок строк не важен"}</p>
      ${schemaHTML()}
-     <div class="edwrap"><textarea id="code-ed" class="editor" spellcheck="false" autocapitalize="off" autocorrect="off" autocomplete="off" aria-label="SQL-запрос">${esc(code)}</textarea></div>
-     <div class="keys" aria-label="Символы">${["SELECT", "FROM", "WHERE", "JOIN", "ON", "GROUP BY", "ORDER BY", "(", ")", "*", ",", "=", "'"].map(k => `<button data-act="ins" data-t="${esc(k)}" tabindex="-1">${esc(k)}</button>`).join("")}</div>
+     <div class="edwrap cm" id="code-ed"></div>
+     ${keyBar("sql")}
      <div class="acts" style="justify-content:flex-start"><button class="btn big" data-act="pRun">Выполнить</button><button class="btn pri big" data-act="pSubmit">Отправить</button></div>
      <div id="run-out" aria-live="polite"></div>
      <div class="row"><button class="btn ghost" data-act="pHint">Подсказка</button><button class="btn ghost" data-act="pSol">${isSolved(p.id) ? "Эталонное решение" : "Показать решение"}</button></div>
      <div id="p-extra"></div>`);
-  openOv("#code-ed");
+  openOv();
+  mountEditor($("#code-ed"), "sql", code, saveDraft, () => runProblem(false));
 }
-function edCode() { const ed = $("#code-ed"); return ed ? ed.value : ""; }
+function edCode() { return ED ? ED.value : ""; }
 let draftT;
 function curLang() { return cur && cur.kind === "sql" ? "sql" : S.lang === "js" ? "js" : "py"; }
 function saveDraft() { if (!cur) return; clearTimeout(draftT); draftT = setTimeout(() => { S.drafts[cur.id + ":" + curLang()] = edCode(); save(); }, 400); }
@@ -331,39 +335,23 @@ async function leetSync(user) {
 }
 
 function practiceAction(a, b) {
+  if (playAction(a, b)) return true;
   switch (a) {
     case "openProb": openProblem(b.dataset.id); return true;
     case "pf": pFilter.diff = b.dataset.k; render(); return true;
     case "plang": S.lang = b.dataset.l; save(); openProblem(cur.id); return true;
-    case "pReset": { const lang = curLang(); delete S.drafts[cur.id + ":" + lang]; save(); $("#code-ed").value = cur.starter[lang]; return true; }
+    case "pReset": { const lang = curLang(); delete S.drafts[cur.id + ":" + lang]; save(); if (ED) ED.value = cur.starter[lang]; return true; }
     case "pRun": runProblem(false); return true;
     case "pSubmit": runProblem(true); return true;
     case "pHint": showHint(); return true;
     case "pSol": showSol(false); return true;
     case "pSolYes": showSol(true); return true;
-    case "ins": {
-      const ed = $("#code-ed"); if (!ed) return true;
-      const t = b.dataset.t === "⇥" ? (S.lang === "js" ? "  " : "    ") : cur && cur.kind === "sql" && /^[A-Z]/.test(b.dataset.t) ? b.dataset.t + " " : b.dataset.t;
-      const s0 = ed.selectionStart, s1 = ed.selectionEnd;
-      ed.setRangeText(t, s0, s1, "end"); ed.focus(); saveDraft(); return true;
-    }
+    case "ins": insertKey(b.dataset.t, PL && dlg.querySelector("#pl-ed") ? PL.lang : curLang()); return true;
     case "leetSync": if (S.leet) leetSync(S.leet.user).then(() => render()); return true;
     case "leetOff": S.leet = null; PR.forEach(p => { if (S.practice[p.id]) delete S.practice[p.id].lc; }); save(); render(); return true;
   }
   return false;
 }
-document.addEventListener("input", e => { if (e.target.id === "code-ed") saveDraft(); });
-document.addEventListener("keydown", e => {
-  const ed = e.target; if (ed.id !== "code-ed") return;
-  const ind = curLang() === "py" ? "    " : "  ";
-  if (e.key === "Tab") { e.preventDefault(); ed.setRangeText(ind, ed.selectionStart, ed.selectionEnd, "end"); saveDraft(); }
-  else if (e.key === "Enter") {
-    const before = ed.value.slice(0, ed.selectionStart), line = before.slice(before.lastIndexOf("\n") + 1);
-    let pad = (line.match(/^\s*/) || [""])[0];
-    if (curLang() !== "sql" && /[:{[(]\s*$/.test(line)) pad += ind;
-    e.preventDefault(); ed.setRangeText("\n" + pad, ed.selectionStart, ed.selectionEnd, "end"); saveDraft();
-  }
-});
 document.addEventListener("submit", async e => {
   if (!e.target.matches("form[data-act=leetForm]")) return;
   e.preventDefault();
@@ -372,3 +360,5 @@ document.addEventListener("submit", async e => {
   if (await leetSync(u)) render();
 });
 document.addEventListener("change", e => { if (e.target.id === "pf-open") { pFilter.open = e.target.checked; render(); } });
+
+/*@PLAYGROUND@*/

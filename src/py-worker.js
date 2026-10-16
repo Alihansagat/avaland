@@ -41,6 +41,39 @@ def __ava_run(code, fn, tests_json):
         return json.dumps({"results": res, "log": buf.getvalue()[-4000:]})
     finally:
         sys.stdout = old
+
+class _AvaOut(io.StringIO):
+    def write(self, s):
+        if self.tell() > 200000:
+            raise RuntimeError("Слишком большой вывод: больше 200 000 символов")
+        return super().write(s)
+
+def __ava_play(code, stdin):
+    out = _AvaOut()
+    old = (sys.stdout, sys.stderr, sys.stdin)
+    sys.stdout = sys.stderr = out
+    sys.stdin = io.StringIO(stdin)
+    err = ""
+    try:
+        def _input(prompt=""):
+            out.write(str(prompt))
+            line = sys.stdin.readline()
+            if not line:
+                raise EOFError("input(): данные закончились — впишите строки в поле «Ввод программы»")
+            return line.rstrip("\\n")
+        import builtins
+        ns = {"__name__": "__main__", "__builtins__": builtins, "input": _input}
+        exec(compile(code, "main.py", "exec"), ns)
+    except SystemExit as e:
+        if e.code not in (None, 0):
+            err = f"SystemExit: {e.code}"
+    except BaseException as e:
+        tb = traceback.format_exception(type(e), e, e.__traceback__)
+        keep = [tb[0]] + [x for x in tb[1:] if 'File "main.py"' in x or not x.startswith("  File")]
+        err = "".join(keep).rstrip()
+    finally:
+        sys.stdout, sys.stderr, sys.stdin = old
+    return json.dumps({"out": out.getvalue(), "err": err})
 `;
 let py = null, ready = null;
 async function boot() {
@@ -56,11 +89,12 @@ async function boot() {
   py.runPython(PRELUDE);
 }
 self.onmessage = async e => {
-  const { id, code, fn, tests, warm } = e.data;
+  const { id, code, fn, tests, warm, play, stdin } = e.data;
   try {
     if (!ready) ready = boot();
     await ready;
     if (warm) { self.postMessage({ id, ready: true }); return; }
+    if (play != null) { self.postMessage({ id, ...JSON.parse(py.globals.get("__ava_play")(play, stdin || "")) }); return; }
     const out = py.globals.get("__ava_run")(code, fn, JSON.stringify(tests));
     self.postMessage({ id, ...JSON.parse(out) });
   } catch (err) {

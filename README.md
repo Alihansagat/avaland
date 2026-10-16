@@ -1,13 +1,22 @@
 # AVALAND
 
-Карта-игра для изучения программирования: 15 стран-языков, 120 уроков, 664 задания, 88 задач с запуском кода (Python через Pyodide, JavaScript и SQL через SQLite), связь с LeetCode, финальные экзамены, сертификаты, повторение раз в 14 дней, уведомления.
+Карта-игра для изучения программирования: 15 стран-языков, 120 уроков, 664 задания, 88 задач с проверкой на тестах, компилятор на 14 языках, связь с LeetCode, финальные экзамены, сертификаты, повторение раз в 14 дней, аккаунты с облачным сохранением и уведомления.
+
+- Играть: https://alihansagat.github.io/avaland/play/ (на iPhone: Safari → «Поделиться» → «На экран „Домой“»)
+- Компилятор: Python (Pyodide), JavaScript, TypeScript (sucrase) и SQL (SQLite) работают на устройстве; C++, C#, Java, Go, Rust, Swift, Dart, Ruby — через Compiler Explorer (godbolt.org), Kotlin — через Kotlin Playground, PHP — через Wandbox. Редактор — CodeMirror 6.
+- Аккаунты и облако: Supabase (почта и пароль, GitHub; Google и Apple — позже). Схема базы: `backend/schema.sql`.
+- Пуш-уведомления на сайте: Web Push (VAPID), рассылка раз в час из GitHub Actions (`.github/workflows/push.yml`, `backend/push/send.mjs`).
 
 ## Структура
 
 ```
 avaland/
 ├── content/            уроки и экзамены в текстовом формате, по файлу на язык
-├── src/                код приложения: app.js, practice-ui.js, py-worker.js, style.css, body.html
+├── src/                код приложения: app.js, practice-ui.js, playground.js (компилятор), cloud.js (аккаунт, облако, пуш), sw.js, py-worker.js, style.css
+│   └── vendor/         собранные библиотеки: редактор CodeMirror, клиент Supabase, TypeScript → JS
+├── vendor-src/         исходники для src/vendor (npm i && npx esbuild …, см. ниже)
+├── backend/            schema.sql для Supabase и рассыльщик пуш-уведомлений
+├── tools/              проверки: verify_outputs.py (ответы «Что выведет код?» на настоящих компиляторах), verify_wrap.py (примеры уроков), ui_test.py
 ├── practice/           задачи практики с эталонными решениями на Python и JavaScript
 ├── fonts/              шрифты, вшитые в приложение (работает офлайн)
 ├── build_content.py    проверяет уроки и собирает src/content.js
@@ -19,6 +28,7 @@ avaland/
 ├── docs/               сайт на GitHub Pages: лендинг, политика, поддержка и веб-версия в docs/play
 ├── store/
 │   ├── LISTING.md      тексты и ответы для App Store Connect
+│   ├── screenshots/    скриншоты iPhone 6,9" и iPad 13"
 
 └── LAUNCH.md           план на неделю и продвижение
 ```
@@ -53,7 +63,7 @@ npm run ios          # соберёт www, скопирует в iOS-проек�
 2. **Product → Archive**. Когда откроется Organizer — **Distribute App → App Store Connect → Upload**.
 3. На https://appstoreconnect.apple.com → **Apps → +** → New App: платформа iOS, имя, язык Русский, Bundle ID, SKU (значения в `store/LISTING.md`).
 4. Через 10–30 минут сборка появится во вкладке **TestFlight**. Установите её через приложение TestFlight и проверьте ещё раз.
-5. Во вкладке приложения заполните тексты, скриншоты (папка `store/screenshots` в локальной копии проекта, в репозиторий не входит), App Privacy («данные не собираются»), возрастной рейтинг, ссылки на политику и поддержку.
+5. Во вкладке приложения заполните тексты, скриншоты (`store/screenshots`), App Privacy («данные не собираются»), возрастной рейтинг, ссылки на политику и поддержку.
 6. Выберите сборку → **Add for Review → Submit**. Обычно проверка занимает 1–2 дня.
 
 ## Сайт для политики конфиденциальности
@@ -126,3 +136,32 @@ cd app && npx cap sync ios
 ## Веб-версия
 
 `dist/avaland.html` — та же игра одним файлом, с «машиной времени» в профиле для проверки повторений и осады. Её удобно показывать друзьям до релиза.
+
+
+## Проверки перед выпуском
+
+```bash
+python3 tools/verify_outputs.py      # каждое задание «Что выведет код?» запускается настоящим компилятором
+python3 tools/verify_wrap.py         # примеры из уроков собираются и запускаются; --write обновляет content/norun.list
+python3 build.py && python3 tools/ui_test.py   # интерфейс в headless Chromium
+```
+
+Нужны python3, node, g++, javac, go, rustc, php, ruby, bun, dotnet 8 и kotlinc. Dart и Swift проверяются на godbolt.org.
+
+## Библиотеки в src/vendor
+
+```bash
+cd vendor-src && npm i
+npx esbuild editor.js   --bundle --minify --format=iife --target=es2019 --outfile=../src/vendor/editor.js
+npx esbuild supabase.js --bundle --minify --format=iife --target=es2019 --outfile=../src/vendor/supabase.js
+npx esbuild ts.js       --bundle --minify --format=iife --target=es2019 --outfile=../src/vendor/ts.js
+```
+
+## Аккаунты и уведомления
+
+- Проект Supabase: `wetwpoypjrenlibezsxy` (Франкфурт). Публичный ключ anon — в `src/cloud.js`, он безопасен благодаря политикам доступа (RLS) из `backend/schema.sql`.
+- Вход через GitHub: OAuth-приложение «AVALAND» в настройках GitHub, Client ID и Client Secret вписаны в Supabase → Authentication → Sign In / Providers → GitHub.
+- Вход через Google: создайте OAuth Client ID в Google Cloud Console (тип Web, redirect `https://wetwpoypjrenlibezsxy.supabase.co/auth/v1/callback`), впишите в Supabase → Providers → Google и поставьте `google: true` в `AUTH_PROVIDERS` в `src/cloud.js`.
+- Вход через Apple: нужен Apple Developer Program; после этого Services ID и ключ Sign in with Apple вписываются в Supabase так же.
+- Пуш: секреты репозитория `PUSH_SECRET`, `VAPID_PRIVATE_KEY` и переменные `SUPABASE_ANON_KEY`, `VAPID_PUBLIC_KEY` (Settings → Secrets and variables → Actions). Рассылка запускается каждый час и пишет не больше одного напоминания в день каждому подписчику в выбранный им час.
+- Подтверждение почты в Supabase выключено: встроенная почта Supabase отправляет письма только участникам проекта. Чтобы включить подтверждение и сброс пароля, подключите свой SMTP (например, Resend) в Authentication → Emails.

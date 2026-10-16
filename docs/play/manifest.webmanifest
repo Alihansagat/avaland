@@ -1,0 +1,19 @@
+{
+  "name": "AVALAND — карта для изучения программирования",
+  "short_name": "AVALAND",
+  "description": "Учите 15 языков программирования, захватывая карту мира кода. Уроки, тесты, задачи и компилятор.",
+  "id": "/avaland/play/",
+  "start_url": "./?source=pwa",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0a1b29",
+  "theme_color": "#0a1b29",
+  "lang": "ru",
+  "categories": ["education", "developer"],
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

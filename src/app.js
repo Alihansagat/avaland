@@ -4,7 +4,7 @@
 
 const LANGS = window.AVA_CONTENT;
 const DEV = !!window.AVA_DEV;
-const VERSION = "1.0.0";
+const VERSION = "1.1.0";
 const APP_STORE_ID = "";            // впишите id приложения из App Store Connect, чтобы появилась кнопка «Оценить»
 const DAY = 864e5, HOLD = 14, WARN = 10, KEY = "avaland-v2";
 const LESSON_PASS = 3, EXAM_RATE = 0.8, EXAM_COOLDOWN_MIN = 30;
@@ -45,12 +45,16 @@ async function load() {
   if (raw) { try { S = merge(fresh(), JSON.parse(raw)); } catch (e) {} }
 }
 let notifyTimer;
-function save() {
+function saveLocal() {
   const raw = JSON.stringify(S);
   try { localStorage.setItem(KEY, raw); } catch (e) {}
   if (NATIVE && P.Preferences) P.Preferences.set({ key: KEY, value: raw }).catch(() => {});
+}
+function save() {
+  saveLocal();
   clearTimeout(notifyTimer);
   notifyTimer = setTimeout(scheduleNotifications, 600);
+  cloudQueue();
 }
 
 /* ---------------- time, progress ---------------- */
@@ -105,6 +109,8 @@ const ACH = [
   ["xp1000", "Тысяча очков", "Наберите 1000 XP", s => S.xp >= 1000],
   ["half", "Полмира", "Достигните 50% господства", s => s.pct >= 50],
   ["emperor", "Император", "Захватите весь мир", s => s.pct >= 100],
+  ["run1", "Hello, world", "Запустите свою программу в компиляторе", () => (S.counts.runs || 0) >= 1],
+  ["run25", "Руки помнят", "Запустите 25 программ в компиляторе", () => (S.counts.runs || 0) >= 25],
   ["prac1", "Первая задача", "Решите задачу на Полигоне", () => practiceStats().solved >= 1],
   ["prac10", "Десять задач", "Решите 10 задач на Полигоне", () => practiceStats().solved >= 10],
   ["prac-hard", "Без страха", "Решите сложную задачу", () => practiceStats().by.hard[0] >= 1],
@@ -362,6 +368,7 @@ function countryHTML(l, inSheet = false) {
     <div class="bar" role="progressbar" aria-valuenow="${held}" aria-valuemin="0" aria-valuemax="${n}"><i style="width:${held / n * 100}%;background:${L.color}"></i></div>
     <p class="about">${L.about}</p>
     <div class="list">${rows}</div>
+    <div class="box"><h3>Компилятор ${esc(L.id === "base" ? "Python" : L.name)}</h3><p>Пишите и запускайте код прямо здесь: редактор с подсветкой, ввод данных и вывод программы.</p><div class="row"><button class="btn" data-act="play" data-lang="${L.id === "base" ? "py" : L.id}">Открыть компилятор</button></div></div>
     <div class="box"><h3>Повторение</h3><p>Раз в ${HOLD} дней отвечайте на вопросы по захваченным урокам — иначе провинции попадут в осаду и перестанут считаться.</p><div class="row"><button class="btn ${siege ? "red" : ""}" data-act="review" data-l="${l}" ${anyRec(l) ? "" : "disabled"}>Повторить язык</button></div></div>
     ${exam}
     <div class="box"><h3>Проект для портфолио ${S.projects[L.id] ? '<span class="pill ok">готов</span>' : ""}</h3><p><b style="color:var(--ink)">${esc(L.project.title)}.</b> ${L.project.desc}</p><div class="row"><button class="btn" data-act="project" data-l="${l}">Требования к проекту</button></div></div>`;
@@ -424,19 +431,21 @@ function viewProfile() {
   const st = S.settings;
   const hours = Array.from({ length: 24 }, (_, h) => `<option value="${h}" ${h === st.hour ? "selected" : ""}>${String(h).padStart(2, "0")}:00</option>`).join("");
   return `<div class="grid2">
+    ${accountCardHTML()}
     <section class="card stack"><div><div class="eyebrow">Профиль</div><h2 class="h-sec">${esc(S.profile.empire || "Ваша империя")}</h2></div>
       <div class="field"><label for="pf-name">Имя и фамилия для сертификатов</label><input class="input" id="pf-name" value="${esc(S.profile.name)}" autocomplete="name" maxlength="60" placeholder="Например, Ада Лавлейс"></div>
       <div class="field"><label for="pf-emp">Название империи</label><input class="input" id="pf-emp" value="${esc(S.profile.empire)}" maxlength="40" placeholder="Империя кода"></div>
       <button class="btn pri" data-act="share">Поделиться картой</button></section>
     <section class="card stack"><div><div class="eyebrow">Настройки</div><h2 class="h-sec">Цели и напоминания</h2></div>
       <div class="field"><label>Цель на день</label><div class="seg" role="group" aria-label="Цель на день">${[20, 50, 100].map(g => `<button data-act="goal" data-g="${g}" aria-pressed="${st.goal === g}">${g} XP</button>`).join("")}</div></div>
-      <label class="switch"><span>Напоминания и предупреждения об осаде</span><input type="checkbox" id="st-remind" ${st.remind ? "checked" : ""}></label>
+      <label class="switch"><span>Напоминания и предупреждения об осаде</span><input type="checkbox" id="st-remind" ${(NATIVE ? st.remind : !!(S.push && S.push.endpoint)) ? "checked" : ""}></label>
       <div class="field"><label for="st-hour">Время напоминания</label><select class="input" id="st-hour">${hours}</select></div>
       <label class="switch"><span>Звуки</span><input type="checkbox" id="st-sound" ${st.sound ? "checked" : ""}></label>
       ${NATIVE ? `<label class="switch"><span>Вибрация</span><input type="checkbox" id="st-hap" ${st.haptics ? "checked" : ""}></label>` : ""}
-      ${NATIVE ? "" : '<p class="note">Напоминания приходят в приложении для iPhone.</p>'}</section>
+      ${NATIVE ? "" : `<p class="note">${esc(pushHint())}</p>`}</section>
     <section class="card stack"><div><div class="eyebrow">О приложении</div><h2 class="h-sec">AVALAND ${VERSION}</h2></div>
-      <p class="muted" style="margin:0">${LANGS.length} стран, ${LANGS.reduce((a, L) => a + L.lessons.length, 0)} уроков, ${LANGS.reduce((a, L) => a + L.lessons.reduce((b, x) => b + x.q.length, 0) + L.exam.length, 0)} заданий и ${(window.AVA_PRACTICE || []).length} задач с запуском кода. Работает без интернета, прогресс хранится только на этом устройстве.</p>
+      <p class="muted" style="margin:0">${LANGS.length} стран, ${LANGS.reduce((a, L) => a + L.lessons.length, 0)} уроков, ${LANGS.reduce((a, L) => a + L.lessons.reduce((b, x) => b + x.q.length, 0) + L.exam.length, 0)} заданий, ${(window.AVA_PRACTICE || []).length} задач и компилятор на 14 языках. Уроки работают без интернета. ${me ? "Прогресс сохраняется в облаке и на этом устройстве." : "Без входа прогресс хранится только на этом устройстве — сохраните резервную копию или войдите в аккаунт."}</p>
+      <div class="row"><button class="btn" data-act="backup">Скачать резервную копию</button><button class="btn" data-act="restore">Восстановить из файла</button><input type="file" id="bk-file" accept="application/json,.json" hidden></div>
       <div class="row">${APP_STORE_ID ? `<a class="btn" href="itms-apps://apps.apple.com/app/id${APP_STORE_ID}?action=write-review">Оценить приложение</a>` : ""}<button class="btn" data-act="privacy">Политика конфиденциальности</button></div>
       <div id="rst"><button class="btn red" data-act="reset">Сбросить прогресс</button></div></section>
     ${DEV ? `<section class="card stack"><div><div class="eyebrow">Для проверки механики</div><h2 class="h-sec">Машина времени</h2></div>
@@ -515,6 +524,9 @@ function openLesson(l, i) {
   shell(L.color, `${esc(L.name)} · урок ${i + 1} из ${L.lessons.length}`, esc(t.t),
     `${t.body.map(p => `<p class="txt">${p}</p>`).join("")}
      ${codeBlock(t.code, L.id)}
+     ${t.run === false
+       ? `<div class="row"><button class="btn ghost" data-act="play" data-lang="${L.id === "base" ? "py" : L.id}">Открыть компилятор ${esc(L.id === "base" ? "Python" : L.name)}</button><span class="note">Этот пример — фрагмент реального проекта (фреймворк, сеть или несколько файлов), отдельно он не запускается.</span></div>`
+       : `<div class="row"><button class="btn" data-act="playLesson" data-l="${l}" data-i="${i}">▶ Запустить и изменить этот код</button></div>`}
      ${t.tips.length ? `<p class="tips-h">Запомните</p><ul class="tips">${t.tips.map(x => `<li>${x}</li>`).join("")}</ul>` : ""}
      <div class="acts"><button class="btn pri big" data-act="startLesson" data-l="${l}" data-i="${i}">${s === "open" ? `К испытанию · ${t.q.length} вопроса` : "Пройти испытание снова"}</button></div>`);
   openOv();
@@ -531,7 +543,21 @@ function openProject(l) {
 
 /* quiz engine */
 function shuffle(a) { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
-const norm = s => String(s).toLowerCase().replace(/\s+/g, "").replace(/[“”«»"]/g, "'").replace(/;$/, "");
+/* Answer checking.
+   canon: case-insensitive, quotes unified, spaces around brackets/commas/operators don't matter ("[1,2]" = "[1, 2]").
+   loose: also ignores separators, so "3, 1, 8" counts for the output "3 1 8" (with a note about the exact form).
+   tight: fill-in answers ignore all spaces ("x=>x*2" = "x => x * 2"). */
+const ansCanon = s => String(s).trim().toLowerCase().replace(/[“”«»"‘’`]/g, "'").replace(/;+\s*$/, "")
+  .replace(/([\[\](){},;:=+\-*/%<>|!&?.])/g, " $1 ").replace(/\s+/g, " ").trim();
+const ansLoose = s => ansCanon(s).replace(/(^| )[,;|]( |$)/g, " ").replace(/\s+/g, " ").trim();
+const ansTight = s => ansCanon(s).replace(/ /g, "");
+function checkAnswer(q, v) {
+  if (!String(v).trim()) return { ok: false };
+  if (q.ans.some(a => ansCanon(a) === ansCanon(v))) return { ok: true };
+  if (q.t === "fill" && q.ans.some(a => ansTight(a) === ansTight(v))) return { ok: true };
+  if (q.ans.some(a => ansLoose(a) === ansLoose(v))) return { ok: true, note: q.t === "out" ? "Засчитано. Точный вывод программы" : "Засчитано. Точная запись" };
+  return { ok: false };
+}
 function startQuiz(cfg) {
   Q = Object.assign({ k: 0, res: [], xp: 0 }, cfg);
   Q.qs = Q.qs.map(x => ({ ...x, opts: x.q.t === "mc" ? shuffle(x.q.o.map((t, j) => ({ t, ok: j === x.q.a }))) : null }));
@@ -576,10 +602,10 @@ function pick(j) {
 function submitText() {
   const x = Q.qs[Q.k], inp = $("#ans");
   if (Q.res.length > Q.k || !inp.value.trim()) return;
-  const ok = x.q.ans.some(a => norm(a) === norm(inp.value));
+  const { ok, note } = checkAnswer(x.q, inp.value);
   inp.classList.add(ok ? "ok" : "no"); inp.readOnly = true;
   const btn = inp.parentElement.querySelector("button"); if (btn) btn.disabled = true;
-  judge(ok, ok ? "" : `<span class="right">Правильно: ${esc(x.q.ans[0])}</span>`);
+  judge(ok, ok ? (note ? `<span class="right">${note}: ${esc(x.q.ans[0])}</span>` : "") : `<span class="right">Правильно: ${esc(x.q.ans[0])}</span>`);
 }
 function next() { if (Q.k === Q.qs.length - 1) finish(); else { Q.k++; showQ(); } }
 
@@ -777,11 +803,12 @@ async function openCert(l) {
 }
 function openPrivacy() {
   shell("", "AVALAND", "Политика конфиденциальности",
-    `<p class="txt">AVALAND не собирает и не передаёт персональные данные. Прогресс, имя для сертификата и настройки хранятся только на вашем устройстве и удаляются вместе с приложением или кнопкой «Сбросить прогресс».</p>
-     <p class="txt">Приложение не использует рекламу, аналитику и трекинг, не требует регистрации и работает без интернета. Уведомления создаются на устройстве и не проходят через наши серверы.</p>
-     <p class="txt">Если вы делитесь картинкой или сертификатом, вы сами выбираете, куда их отправить.</p>
-     <p class="txt">Если вы подключите профиль LeetCode, приложение отправит ваш никнейм на leetcode.com, чтобы получить публичную статистику решённых задач. Пароль не нужен и не запрашивается. Отключить связь можно на вкладке «Практика».</p>
-     <p class="note">Обновлено: 14 октября 2026.</p>`);
+    `<p class="txt">Учиться можно без регистрации — тогда прогресс, имя для сертификата и настройки хранятся только на вашем устройстве. Рекламы, аналитики и отслеживания нет.</p>
+     <p class="txt">Если вы входите в аккаунт (почта или GitHub), мы храним почту, имя и аватар из GitHub и ваш прогресс у провайдера Supabase (Франкфурт, ЕС). Пароль хранится только в виде хеша. Удалить аккаунт можно в профиле.</p>
+     <p class="txt">В приложении для iPhone напоминания создаются на устройстве. На сайте, если вы включили напоминания, мы храним адрес push-подписки, часовой пояс, время напоминания, дату ближайшей осады, день последнего занятия и длину серии — чтобы раз в день прислать напоминание.</p>
+     <p class="txt">Код на Python, JavaScript, TypeScript и SQL выполняется на устройстве. Код на других языках отправляется на открытые сервисы компиляции (godbolt.org, play.kotlinlang.org, wandbox.org) — не пишите в него личные данные.</p>
+     <p class="txt">Если вы подключите профиль LeetCode, приложение отправит ваш никнейм на leetcode.com, чтобы получить публичную статистику решённых задач. Пароль не нужен.</p>
+     <p class="note">Обновлено: 15 октября 2026. Полная версия: alihansagat.github.io/avaland/privacy.html</p>`);
   openOv();
 }
 function openCountry(l) {
@@ -838,7 +865,7 @@ document.addEventListener("click", async e => {
     case "onbLang": S.sel = b.dataset.id; save(); document.querySelectorAll(".lchip").forEach(x => x.setAttribute("aria-pressed", x.dataset.id === S.sel)); break;
     case "onbGoal": S.settings.goal = +b.dataset.g; document.querySelectorAll("[data-act=onbGoal]").forEach(x => x.setAttribute("aria-pressed", x === b)); break;
     case "onbDone": onbDone(); break;
-    default: practiceAction(a, b);
+    default: if (!cloudAction(a, b)) practiceAction(a, b);
   }
 });
 document.addEventListener("submit", e => { if (e.target.matches("form[data-act=text]")) { e.preventDefault(); submitText(); } });
@@ -848,7 +875,11 @@ document.addEventListener("change", async e => {
   else if (t.id === "pf-emp") S.profile.empire = t.value.trim();
   else if (t.id === "st-sound") S.settings.sound = t.checked;
   else if (t.id === "st-hap") S.settings.haptics = t.checked;
-  else if (t.id === "st-hour") S.settings.hour = +t.value;
+  else if (t.id === "st-hour") { S.settings.hour = +t.value; if (!NATIVE) setTimeout(pushSync, 0); }
+  else if (t.id === "st-remind" && !NATIVE) {
+    if (t.checked) { const ok = await pushEnable(); if (!ok) t.checked = false; } else await pushDisable();
+    render(); return;
+  }
   else if (t.id === "st-remind") {
     S.settings.remind = t.checked;
     if (t.checked && NATIVE) { const r = await askNotify(); if (r !== "granted") toast("Разрешите уведомления в настройках iPhone"); }
@@ -913,16 +944,20 @@ async function onbDone() {
 /* ---------------- boot ---------------- */
 async function boot() {
   await load();
+  const tq = new URLSearchParams(location.search).get("tab");
+  if (["map", "practice", "review", "awards", "profile"].includes(tq)) { S.tab = tq; history.replaceState(null, "", location.pathname + location.hash); }
   if (NATIVE) {
     try { P.StatusBar && P.StatusBar.setStyle({ style: "DARK" }); } catch (e) {}
     try { P.SplashScreen && P.SplashScreen.hide(); } catch (e) {}
     try { Cap.Plugins.App && Cap.Plugins.App.addListener("appStateChange", st => { if (st.isActive) render(); }); } catch (e) {}
   }
   render();
-  if (!S.onboarded) onbStep(0);
+  if (!S.onboarded && !/[?&]code=/.test(location.search)) onbStep(0);
   scheduleNotifications();
+  cloudBoot().then(() => { if (ov.hidden) render(); });
 }
 /*@PRACTICE@*/
-if (DEV || window.AVA_SELFTEST) window.__ava = { get S() { return S; }, get Q() { return Q; }, save, render, startQuiz, openLesson, openCert, openCountry, openProblem, runJS, runPY, runSQL, leetFetch };
+/*@CLOUD@*/
+if (DEV || window.AVA_SELFTEST) window.__ava = { get S() { return S; }, get Q() { return Q; }, save, render, startQuiz, openLesson, openCert, openCountry, openProblem, runJS, runPY, runSQL, leetFetch, runCode, wrapProgram, openPlay };
 boot();
 })();

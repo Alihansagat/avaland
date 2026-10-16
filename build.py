@@ -29,6 +29,12 @@ def copy_sqljs(dest):
         shutil.copy(src / f, dest / "sqljs" / f)
 
 
+def copy_vendor(dest):
+    (dest / "vendor").mkdir(parents=True, exist_ok=True)
+    for f in (SRC / "vendor").iterdir():
+        shutil.copy(f, dest / "vendor" / f.name)
+
+
 def copy_pyodide(dest):
     src = ROOT / "app" / "node_modules" / "pyodide"
     if not src.exists():
@@ -66,6 +72,8 @@ def main():
     practice = (SRC / "practice.js").read_text(encoding="utf-8")
     sqldb = (SRC / "sqldb.js").read_text(encoding="utf-8")
     app = (SRC / "app.js").read_text(encoding="utf-8").replace("/*@PRACTICE@*/", (SRC / "practice-ui.js").read_text(encoding="utf-8"))
+    app = app.replace("/*@PLAYGROUND@*/", (SRC / "playground.js").read_text(encoding="utf-8"))
+    app = app.replace("/*@CLOUD@*/", (SRC / "cloud.js").read_text(encoding="utf-8"))
 
     # 1) web / artifact build
     dist = ROOT / "dist"; dist.mkdir(exist_ok=True)
@@ -96,6 +104,7 @@ def main():
     (dist / "avaland.html").write_text(web, encoding="utf-8")
     copy_sqljs(dist)
     copy_pyodide(dist)
+    copy_vendor(dist)
     import base64
     (dist / "pyodide" / "python_stdlib.b64.txt").write_text(base64.b64encode((dist / "pyodide" / "python_stdlib.zip").read_bytes()).decode())
     (dist / "pyodide" / "python_stdlib.zip").unlink()
@@ -110,7 +119,11 @@ def main():
         (docs_play / "index.html").write_text(
             '<!doctype html>\n<html lang="ru">\n<head>\n<meta charset="utf-8">\n'
             '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">\n'
-            '<meta name="theme-color" content="#0a1b29">\n<link rel="icon" href="../img/icon.png">\n'
+            '<meta name="theme-color" content="#0a1b29">\n<link rel="icon" href="icons/icon-192.png">\n'
+            '<link rel="manifest" href="manifest.webmanifest">\n<link rel="apple-touch-icon" href="icons/icon-180.png">\n'
+            '<meta name="apple-mobile-web-app-capable" content="yes">\n<meta name="mobile-web-app-capable" content="yes">\n'
+            '<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">\n<meta name="apple-mobile-web-app-title" content="AVALAND">\n'
+            '<meta name="description" content="Учите 15 языков программирования, захватывая карту мира кода: уроки, тесты, задачи и компилятор.">\n'
             '<style>:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}[hidden]{display:none!important}</style>\n'
             '<title>AVALAND — играть</title>\n</head>\n<body>\n' + page + '\n</body>\n</html>\n', encoding="utf-8")
         # On GitHub Pages the Python and SQLite runtimes come from jsDelivr (no CSP there), so the repo stays small
@@ -118,12 +131,17 @@ def main():
         cdn_sql = "https://cdn.jsdelivr.net/npm/sql.js@1.14.2/dist/"
         html = (docs_play / "index.html").read_text(encoding="utf-8")
         html = html.replace('<script src="sqljs/sql-wasm.js"></script>', f'<script>window.AVA_SQL_BASE="{cdn_sql}";</script>\n<script src="{cdn_sql}sql-wasm.js"></script>')
+        html = html.replace("window.AVA_WEB=true;", 'window.AVA_WEB=true;window.AVA_SW="sw.js";', 1)
         (docs_play / "index.html").write_text(html, encoding="utf-8")
         worker = (SRC / "py-worker.js").read_text(encoding="utf-8")
         worker = worker.replace('import { loadPyodide } from "./pyodide/pyodide.mjs";', f'import {{ loadPyodide }} from "{cdn_py}pyodide.mjs";')
         worker = worker.replace('const base = new URL("pyodide/", import.meta.url).href;', f'const base = "{cdn_py}";')
         worker = worker.replace('const web = new URL(self.location.href).searchParams.has("web");', "const web = false;")
         (docs_play / "py-worker.js").write_text(worker, encoding="utf-8")
+        copy_vendor(docs_play)
+        import hashlib
+        ver = hashlib.sha1((html + worker).encode("utf-8")).hexdigest()[:10]
+        (docs_play / "sw.js").write_text((SRC / "sw.js").read_text(encoding="utf-8").replace("@VERSION@", ver), encoding="utf-8")
 
     # 2) native bundle
     www = ROOT / "app" / "www"
@@ -140,6 +158,7 @@ def main():
     shutil.copy(SRC / "py-worker.js", www / "py-worker.js")
     copy_pyodide(www)
     copy_sqljs(www)
+    copy_vendor(www)
     if SELFTEST:
         shutil.copy(SRC / "selftest.js", www / "selftest.js")
     (www / "sqldb.js").write_text(sqldb, encoding="utf-8")

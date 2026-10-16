@@ -4,3 +4,6 @@ app/ios/App/App/public/
 app/ios/App/build/
 .DS_Store
 __pycache__/
+dist/
+app/www/
+extra_inserted.bak
