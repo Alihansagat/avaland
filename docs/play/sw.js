@@ -1,5 +1,5 @@
 /* AVALAND service worker: offline cache and push notifications */
-const VERSION = "49a1e2ceea";
+const VERSION = "4f0f92c64d";
 const SHELL = "ava-shell-" + VERSION, RUNTIME = "ava-runtime-v1";
 const CORE = ["./", "./index.html", "./py-worker.js", "./manifest.webmanifest", "./icons/icon-192.png", "./icons/icon-180.png", "./vendor/editor.js", "./vendor/supabase.js", "./vendor/ts.js"];
 

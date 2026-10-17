@@ -95,6 +95,54 @@ def __ava_play(code, stdin):
     except BaseException:
         imgs = []
     return json.dumps({"out": out.getvalue(), "err": err, "imgs": imgs})
+
+import ast, inspect
+class _AvaTopAwait(ast.NodeTransformer):
+    # asyncio.run(main()) на верхнем уровне -> await main(): в браузере нельзя блокировать поток
+    def _skip(self, node):
+        return node
+    visit_FunctionDef = visit_AsyncFunctionDef = visit_Lambda = visit_ClassDef = _skip
+    def visit_Call(self, node):
+        self.generic_visit(node)
+        f = node.func
+        if isinstance(f, ast.Attribute) and f.attr == "run" and isinstance(f.value, ast.Name) and f.value.id == "asyncio" and node.args:
+            return ast.copy_location(ast.Await(node.args[0]), node)
+        return node
+
+async def __ava_play_async(code, stdin):
+    out = _AvaOut()
+    old = (sys.stdout, sys.stderr, sys.stdin)
+    sys.stdout = sys.stderr = out
+    sys.stdin = io.StringIO(stdin)
+    err = ""
+    try:
+        def _input(prompt=""):
+            out.write(str(prompt))
+            line = sys.stdin.readline()
+            if not line:
+                raise EOFError("input(): данные закончились — впишите строки в поле «Ввод программы»")
+            return line.rstrip("\\n")
+        import builtins
+        ns = {"__name__": "__main__", "__builtins__": builtins, "input": _input}
+        tree = _AvaTopAwait().visit(ast.parse(code, "main.py"))
+        ast.fix_missing_locations(tree)
+        r = eval(compile(tree, "main.py", "exec", flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT), ns)
+        if inspect.iscoroutine(r):
+            await r
+    except SystemExit as e:
+        if e.code not in (None, 0):
+            err = f"SystemExit: {e.code}"
+    except BaseException as e:
+        tb = traceback.format_exception(type(e), e, e.__traceback__)
+        keep = [tb[0]] + [x for x in tb[1:] if 'File "main.py"' in x or not x.startswith("  File")]
+        err = "".join(keep).rstrip()
+    finally:
+        sys.stdout, sys.stderr, sys.stdin = old
+    try:
+        imgs = _ava_figs()
+    except BaseException:
+        imgs = []
+    return json.dumps({"out": out.getvalue(), "err": err, "imgs": imgs})
 `;
 const FA_SHIM = String.raw`
 # Однопоточный TestClient для Pyodide: в браузере нет потоков, поэтому
@@ -225,7 +273,11 @@ self.onmessage = async e => {
       }
       self.postMessage({ id, loaded: names.join(", ") }); return;
     }
-    if (play != null) { self.postMessage({ id, ...JSON.parse(py.globals.get("__ava_play")(play, stdin || "")) }); return; }
+    if (play != null) {
+      const useAsync = /\basyncio\.run\(|^\s*await\s/m.test(play);
+      const res = useAsync ? await py.globals.get("__ava_play_async")(play, stdin || "") : py.globals.get("__ava_play")(play, stdin || "");
+      self.postMessage({ id, ...JSON.parse(res) }); return;
+    }
     const out = py.globals.get("__ava_run")(code, fn, JSON.stringify(tests));
     self.postMessage({ id, ...JSON.parse(out) });
   } catch (err) {
