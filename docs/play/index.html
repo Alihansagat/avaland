@@ -1605,7 +1605,7 @@ let pyWorker = null, pyReady = false, pySeq = 0;
 const pyWait = {};
 function pyStart() {
   if (pyWorker) return pyWorker;
-  pyWorker = new Worker(window.AVA_WEB ? "py-worker.js?web=1" : "py-worker.js", { type: "module" });
+  pyWorker = new Worker(window.AVA_WEB ? "py-worker.js?web=1&v=196bb3b4" : "py-worker.js", { type: "module" });
   pyWorker.onmessage = e => { const cb = pyWait[e.data.id]; if (cb) { delete pyWait[e.data.id]; cb(e.data); } };
   pyWorker.onerror = () => { Object.values(pyWait).forEach(cb => cb({ fatal: "Python не загрузился" })); pyKill(); };
   return pyWorker;

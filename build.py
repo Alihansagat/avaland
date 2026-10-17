@@ -148,6 +148,9 @@ def main():
         (docs_play / "py-worker.js").write_text(worker, encoding="utf-8")
         copy_vendor(docs_play)
         import hashlib
+        wver = hashlib.sha1(worker.encode("utf-8")).hexdigest()[:8]
+        html = html.replace('"py-worker.js?web=1"', f'"py-worker.js?web=1&v={wver}"')   # новый воркер сразу после обновления
+        (docs_play / "index.html").write_text(html, encoding="utf-8")
         ver = hashlib.sha1((html + worker).encode("utf-8")).hexdigest()[:10]
         (docs_play / "sw.js").write_text((SRC / "sw.js").read_text(encoding="utf-8").replace("@VERSION@", ver), encoding="utf-8")
 
