@@ -218,7 +218,7 @@ async function runRemote(lang, code, stdin) {
 const unesc = s => s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&");
 
 /* --- Python и SQL локально --- */
-const PY_LIBS = new Set(["numpy", "pandas", "matplotlib", "sklearn", "scipy", "torch", "seaborn", "statsmodels", "sympy", "networkx", "PIL", "bs4", "requests", "yaml"]);
+const PY_LIBS = new Set(["numpy", "pandas", "matplotlib", "sklearn", "scipy", "torch", "seaborn", "statsmodels", "sympy", "networkx", "PIL", "bs4", "requests", "yaml", "fastapi", "starlette", "pydantic", "sqlalchemy", "httpx", "bcrypt", "pytest"]);
 async function runPyPlay(code, stdin) {
   if (!pyReady) {
     playStatus("Загружаю Python… Это нужно один раз за запуск, около 5 секунд.");

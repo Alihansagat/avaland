@@ -25,6 +25,30 @@
     },
     "jobs": "Junior ML Engineer, Junior Data Scientist, ML-стажёр"
   },
+  "pyback": {
+    "parent": "py",
+    "title": "Путь Python-бэкендера",
+    "role": "Junior Python Backend Developer",
+    "about": "API на FastAPI, база данных через SQLAlchemy и Alembic, авторизация, тесты, очереди и Docker — стек большинства вакансий Python-бэкенда.",
+    "caves": [
+      "fastapi",
+      "sqlalchemy",
+      "pyprod"
+    ],
+    "project": {
+      "title": "REST API онлайн-школы на FastAPI",
+      "desc": "Бэкенд с курсами, уроками, записью студентов и оплатой — как настоящий продукт.",
+      "req": [
+        "FastAPI: роутеры, Pydantic-схемы, правильные коды ответов и документация /docs",
+        "PostgreSQL через SQLAlchemy 2.0, связи без N+1, миграции Alembic",
+        "Регистрация и вход: bcrypt и JWT, роли студент и админ",
+        "Тесты pytest + TestClient: успешные сценарии и все ошибки, покрытие от 70%",
+        "Фоновая отправка писем через Celery или ARQ и кэш в Redis",
+        "Docker Compose (API, база, Redis), CI на GitHub Actions и деплой с README"
+      ]
+    },
+    "jobs": "Junior Python Developer, Junior Backend Developer (Python/FastAPI), стажёр бэкенда"
+  },
   "fe": {
     "parent": "js",
     "title": "Путь фронтенд-разработчика",

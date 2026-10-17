@@ -96,7 +96,106 @@ def __ava_play(code, stdin):
         imgs = []
     return json.dumps({"out": out.getvalue(), "err": err, "imgs": imgs})
 `;
-let py = null, ready = null;
+const FA_SHIM = String.raw`
+# Однопоточный TestClient для Pyodide: в браузере нет потоков, поэтому
+# ASGI-приложение выполняется вручную, а run_in_threadpool вызывает функцию сразу.
+def _ava_fastapi_shim():
+    import json as _json, sys, functools
+    from urllib.parse import urlsplit, urlencode
+
+    import importlib, types
+    for modname in ("starlette.concurrency", "starlette.background", "starlette.routing", "fastapi.routing", "fastapi.dependencies.utils", "fastapi.concurrency"):
+        try:
+            importlib.import_module(modname)
+        except Exception:
+            pass
+
+    async def _direct(func, *args, **kwargs):
+        return func(*args, **kwargs)
+    import anyio.to_thread
+    async def _run_sync(func, *args, abandon_on_cancel=False, cancellable=None, limiter=None):
+        return func(*args)
+    anyio.to_thread.run_sync = _run_sync
+    for modname in ("starlette.concurrency", "fastapi.concurrency", "fastapi.routing", "fastapi.dependencies.utils", "starlette.routing", "starlette.background", "starlette.responses"):
+        m = sys.modules.get(modname)
+        if m is not None and hasattr(m, "run_in_threadpool"):
+            m.run_in_threadpool = _direct
+
+    def _drive(coro):
+        try:
+            while True:
+                coro.send(None)
+        except StopIteration as e:
+            return e.value
+
+    class _Resp:
+        def __init__(self, status, headers, body):
+            self.status_code = status
+            self.headers = {k.decode().lower(): v.decode() for k, v in headers}
+            self.content = body
+            self.text = body.decode("utf-8", "replace")
+        def json(self):
+            return _json.loads(self.text)
+        def __repr__(self):
+            return f"<Response [{self.status_code}]>"
+
+    class TestClient:
+        def __init__(self, app, base_url="http://testserver", raise_server_exceptions=True, **kw):
+            self.app, self.headers, self.raise_exc = app, {}, raise_server_exceptions
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+        def request(self, method, url, json=None, data=None, params=None, headers=None, **kw):
+            parts = urlsplit(url)
+            query = parts.query
+            if params:
+                query = (query + "&" if query else "") + urlencode(params, doseq=True)
+            hdrs = {**self.headers, **(headers or {})}
+            body = b""
+            if json is not None:
+                body = _json.dumps(json).encode(); hdrs.setdefault("content-type", "application/json")
+            elif data is not None:
+                body = urlencode(data).encode() if isinstance(data, dict) else (data.encode() if isinstance(data, str) else data)
+                if isinstance(data, dict): hdrs.setdefault("content-type", "application/x-www-form-urlencoded")
+            hdrs.setdefault("host", "testserver")
+            hdrs["content-length"] = str(len(body))
+            scope = {"type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": method.upper(), "scheme": "http",
+                     "path": parts.path or "/", "raw_path": (parts.path or "/").encode(), "root_path": "", "query_string": query.encode(),
+                     "headers": [(k.lower().encode(), str(v).encode()) for k, v in hdrs.items()], "server": ("testserver", 80), "client": ("testclient", 50000), "state": {}}
+            sent, state = [], {"done": False}
+            async def receive():
+                if not state["done"]:
+                    state["done"] = True
+                    return {"type": "http.request", "body": body, "more_body": False}
+                return {"type": "http.disconnect"}
+            async def send(msg):
+                sent.append(msg)
+            try:
+                _drive(self.app(scope, receive, send))
+            except Exception:
+                if self.raise_exc or not any(m["type"] == "http.response.start" for m in sent):
+                    raise
+            start = next((m for m in sent if m["type"] == "http.response.start"), {"status": 500, "headers": []})
+            data_out = b"".join(m.get("body", b"") for m in sent if m["type"] == "http.response.body")
+            return _Resp(start["status"], start.get("headers", []), data_out)
+        def get(self, url, **kw): return self.request("GET", url, **kw)
+        def post(self, url, **kw): return self.request("POST", url, **kw)
+        def put(self, url, **kw): return self.request("PUT", url, **kw)
+        def patch(self, url, **kw): return self.request("PATCH", url, **kw)
+        def delete(self, url, **kw): return self.request("DELETE", url, **kw)
+
+    TestClient.__module__ = "fastapi.testclient"
+    for name in ("starlette.testclient", "fastapi.testclient"):
+        m = types.ModuleType(name)
+        m.TestClient = TestClient
+        sys.modules[name] = m
+        parent, _, child = name.rpartition(".")
+        if parent in sys.modules:
+            setattr(sys.modules[parent], child, m)
+_ava_fastapi_shim()
+`;
+let py = null, ready = null, faShim = false;
 async function boot() {
   const base = "https://cdn.jsdelivr.net/npm/pyodide@314.0.7/";
   const web = false;
@@ -121,6 +220,9 @@ self.onmessage = async e => {
       const names = [];
       try { await py.loadPackagesFromImports(pkgs, { messageCallback: m => { const k = /Loaded (.+)/.exec(m); if (k) names.push(k[1]); }, errorCallback: () => {} }); }
       catch (err) { self.postMessage({ id, pkgErr: String(err && err.message || err) }); return; }
+      if (!faShim && /^\s*(?:from|import)\s+(?:fastapi|starlette)\b/m.test(pkgs)) {
+        try { py.runPython(FA_SHIM); faShim = true; } catch (err) { self.postMessage({ id, pkgErr: "FastAPI: " + String(err && err.message || err).slice(-300) }); return; }
+      }
       self.postMessage({ id, loaded: names.join(", ") }); return;
     }
     if (play != null) { self.postMessage({ id, ...JSON.parse(py.globals.get("__ava_play")(play, stdin || "")) }); return; }

@@ -313,7 +313,7 @@ function mapSVG(kind, stFn, sel = -1, interactive = true) {
     }
     if (interactive) tracksOf(l).forEach((tid, k) => {     // вход в пещеры острова
       const open = trackOpen(tid), done = trackDone(tid), n = trackCaves(tid).length;
-      const cx = x + (tall ? 74 : 62) + k * 30, cy = y + (tall ? -30 : -22), sc = tall ? 1.25 : 1;
+      const cx = x + (tall ? 74 : 62) + k * (tall ? 38 : 30), cy = y + (tall ? -30 : -22), sc = tall ? 1.25 : 1;
       labels += `<g class="cavemk${open ? "" : " locked"}${done ? " done" : ""}" data-t="${tid}" transform="translate(${cx},${cy}) scale(${sc})" role="button" aria-label="Пещеры: ${esc(TRACKS[tid].title)}"><title>${esc(TRACKS[tid].title)} — ${open ? `${trackDoneN(tid)} из ${n} пещер` : `откроется после экзамена ${esc(L.name)}`}</title>
         <path d="M-13 9 L-13 1 Q-13 -12 0 -12 Q13 -12 13 1 L13 9 Z" class="cv-rock"/><path d="M-7 9 L-7 3 Q-7 -5 0 -5 Q7 -5 7 3 L7 9 Z" class="cv-hole"/>
         ${open ? `<text class="cv-n" x="0" y="23">${trackDoneN(tid)}/${n}</text>` : `<path class="cv-lock" d="M-3 4 h6 v5 h-6 z M-2 4 v-2 a2 2 0 0 1 4 0 v2"/>`}</g>`;

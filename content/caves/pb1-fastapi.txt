@@ -1,0 +1,436 @@
+@lang id=fastapi name=FastAPI land=Пещера FastAPI color=#009688 cave=py track=pyback step=1
+@about Самый популярный фреймворк для API на Python: маршруты, Pydantic-модели, валидация, ошибки, зависимости и автодокументация.
+@why Первая, потому что FastAPI — это «дверь» бэкенда: через него приходят все запросы. База данных из второй пещеры и авторизация, тесты и Docker из третьей подключаются к уже работающему API.
+
+@lesson Первое API: маршруты и параметры
+FastAPI-приложение — объект `app = FastAPI()`. Маршрут описывают декоратором с HTTP-методом: `@app.get("/courses")`, `@app.post(...)`, `@app.put(...)`, `@app.delete(...)`. Функция возвращает словарь или список — FastAPI сам превратит его в JSON.
+Параметр пути пишут в фигурных скобках: `@app.get("/courses/{course_id}")` и `def read(course_id: int)`. Аннотация типа — не украшение: FastAPI проверит и преобразует значение, а на `/courses/abc` ответит ошибкой 422.
+Аргументы функции, которых нет в пути, становятся параметрами строки запроса: `def search(q: str, limit: int = 10)` → `/search?q=python&limit=5`. Значение по умолчанию делает параметр необязательным.
+Запуск: `pip install "fastapi[standard]"`, затем `fastapi dev main.py`. Документация появляется сама: `/docs` (Swagger) и `/redoc`. В примере ниже запрос отправляет `TestClient` — так API проверяют без сервера, и так оно запускается прямо в AVALAND.
+```code
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+app = FastAPI(title="AVALAND API")
+
+COURSES = {1: "Python", 2: "FastAPI", 3: "SQL"}
+
+@app.get("/")
+def root():
+    return {"message": "Привет, бэкенд!"}
+
+@app.get("/courses/{course_id}")
+def read_course(course_id: int):
+    return {"id": course_id, "title": COURSES.get(course_id, "неизвестно")}
+
+@app.get("/search")
+def search(q: str, limit: int = 10):
+    found = [t for t in COURSES.values() if q.lower() in t.lower()]
+    return {"q": q, "results": found[:limit]}
+
+client = TestClient(app)
+print(client.get("/").json())                    # {'message': 'Привет, бэкенд!'}
+print(client.get("/courses/2").json())           # {'id': 2, 'title': 'FastAPI'}
+print(client.get("/search?q=py").json())         # {'q': 'py', 'results': ['Python']}
+print(client.get("/courses/abc").status_code)    # 422 — не число
+print(client.get("/search").status_code)         # 422 — нет обязательного q
+```
+! Тип параметра — это и проверка, и преобразование
+! Параметр с значением по умолчанию — необязательный
+! `/docs` создаётся автоматически из кода
+? mc Что вернёт FastAPI на запрос `/courses/abc`, если параметр объявлен как `course_id: int`?
++ Ошибку 422 с описанием, что значение не число
+- 200 и строку "abc"
+- 404
+- 500
+= Валидация по аннотациям типов — главная фишка FastAPI.
+? mc Как в FastAPI объявить параметр строки запроса `?limit=5`?
++ Добавить аргумент функции `limit: int = 10`, которого нет в пути
+- Написать `{limit}` в пути
+- Прочитать `request.args`
+- Через декоратор `@query`
+= Всё, чего нет в пути, — параметры запроса.
+? fill Впишите адрес, по которому FastAPI показывает интерактивную документацию.
+```code
+http://127.0.0.1:8000/___
+```
+> docs
+= /docs — Swagger UI, /redoc — альтернативный вид.
+? out Что выведет код?
+```code
+COURSES = {1: "Python", 2: "FastAPI", 3: "SQL"}
+q, limit = "s", 2
+found = [t for t in COURSES.values() if q in t.lower()]
+print(found[:limit], len(found))
+```
+> ['FastAPI', 'SQL'] 2
+= Логика обработчика /search без сервера.
+
+@lesson Pydantic: модели запросов и ответов
+Тело запроса описывают классом Pydantic: `class CourseIn(BaseModel): title: str; price: int = 0`. Если параметр функции — модель, FastAPI прочитает JSON из тела, проверит типы и вернёт 422 с понятным списком ошибок.
+`Field` задаёт ограничения: `Field(min_length=2, max_length=100)`, `Field(ge=0)` (не меньше нуля), `pattern`. Pydantic приводит типы: строка `"20"` в поле `int` станет числом 20, а `"abc"` вызовет ошибку.
+`response_model` описывает, что вернётся клиенту: лишние поля (например, пароль) отрезаются, документация показывает точную схему. Методы модели: `model_dump()` — в словарь, `model_dump_json()` — в JSON, `model_validate(data)` — из словаря.
+```code
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from pydantic import BaseModel, Field
+
+class CourseIn(BaseModel):
+    title: str = Field(min_length=2, max_length=100)
+    price: int = Field(default=0, ge=0)
+    tags: list[str] = []
+
+class CourseOut(BaseModel):
+    id: int
+    title: str
+    price: int
+
+app = FastAPI()
+DB: dict[int, dict] = {}
+
+@app.post("/courses", response_model=CourseOut, status_code=201)
+def create_course(course: CourseIn):
+    new_id = len(DB) + 1
+    DB[new_id] = {"id": new_id, **course.model_dump(), "secret_note": "внутреннее"}
+    return DB[new_id]                       # secret_note и tags не попадут в ответ
+
+client = TestClient(app)
+r = client.post("/courses", json={"title": "FastAPI", "price": "4990"})
+print(r.status_code, r.json())              # 201 {'id': 1, 'title': 'FastAPI', 'price': 4990}
+bad = client.post("/courses", json={"title": "F", "price": -1})
+print(bad.status_code, [e["loc"][-1] for e in bad.json()["detail"]])   # 422 ['title', 'price']
+```
+! Модель в аргументах — значит, данные берутся из тела JSON
+! `response_model` скрывает лишние поля от клиента
+! Ограничения — в `Field`, а не ручными if
+? mc Что делает `response_model=CourseOut`?
++ Ответ проходит через модель: лишние поля отрезаются, типы проверяются, схема видна в документации
+- Проверяет тело запроса
+- Сохраняет данные в базу
+- Ускоряет ответ
+= Так пароль или внутренние поля не утекут клиенту.
+? out Что выведет код?
+```code
+from pydantic import BaseModel, Field
+
+class CourseIn(BaseModel):
+    title: str = Field(min_length=2)
+    price: int = 0
+
+c = CourseIn(title="SQL", price="1500")
+print(c.price + 1, c.model_dump())
+```
+> 1501 {'title': 'SQL', 'price': 1500}
+= Pydantic привёл строку "1500" к int.
+? fill Впишите ограничение Field: цена не меньше нуля.
+```code
+price: int = Field(___=0)
+```
+> ge
+= ge — greater or equal, gt — строго больше.
+? mc Клиент прислал `{"title": "A"}` при `Field(min_length=2)`. Какой код ответа?
++ 422
+- 200
+- 400
+- 500
+= Ошибка валидации — Unprocessable Entity.
+
+@lesson Статус-коды и ошибки
+Хорошее API отвечает правильными кодами: 200 — успех, 201 — создано, 204 — удалено, без тела, 400 — неверный запрос, 401 — не вошёл, 403 — нет прав, 404 — не найдено, 409 — конфликт (такая почта уже есть), 422 — ошибка валидации.
+Ошибку возвращают исключением `raise HTTPException(status_code=404, detail="Курс не найден")` — выполнение функции останавливается, клиент получает `{"detail": ...}`. Константы — в `fastapi.status`: `status.HTTP_404_NOT_FOUND`.
+Свои исключения бизнес-логики обрабатывают в одном месте через `@app.exception_handler(MyError)` — так сервисный код не знает про HTTP.
+```code
+from fastapi import FastAPI, HTTPException, Request, status
+from fastapi.responses import JSONResponse
+from fastapi.testclient import TestClient
+
+class NotEnoughMoney(Exception):
+    def __init__(self, need: int):
+        self.need = need
+
+app = FastAPI()
+USERS = {"ada@mail.kz"}
+BALANCE = {"ada@mail.kz": 3000}
+
+@app.exception_handler(NotEnoughMoney)
+def money_handler(request: Request, exc: NotEnoughMoney):
+    return JSONResponse(status_code=402, content={"detail": f"Не хватает {exc.need} ₸"})
+
+@app.post("/register", status_code=status.HTTP_201_CREATED)
+def register(email: str):
+    if email in USERS:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail="Почта уже занята")
+    USERS.add(email)
+    return {"email": email}
+
+@app.post("/buy")
+def buy(email: str, price: int):
+    if email not in BALANCE:
+        raise HTTPException(404, detail="Пользователь не найден")
+    if BALANCE[email] < price:
+        raise NotEnoughMoney(price - BALANCE[email])
+    BALANCE[email] -= price
+    return {"left": BALANCE[email]}
+
+c = TestClient(app)
+print(c.post("/register?email=ada@mail.kz").status_code)        # 409
+print(c.post("/register?email=tim@mail.kz").status_code)        # 201
+print(c.post("/buy?email=ada@mail.kz&price=5000").json())        # {'detail': 'Не хватает 2000 ₸'}
+print(c.post("/buy?email=ada@mail.kz&price=1000").json())        # {'left': 2000}
+```
+! Ошибка — через `raise HTTPException`, а не `return`
+! 404 — нет объекта, 409 — конфликт, 422 — неверные данные
+! Свои исключения — в одном `exception_handler`
+? mc Какой код вернуть при регистрации на уже занятую почту?
++ 409 Conflict
+- 200 OK
+- 404 Not Found
+- 500 Internal Server Error
+= Запрос корректный, но конфликтует с текущим состоянием.
+? out Что выведет код?
+```code
+class HTTPException(Exception):
+    def __init__(self, status_code, detail):
+        self.status_code, self.detail = status_code, detail
+
+def read(cid, db):
+    if cid not in db:
+        raise HTTPException(404, "Курс не найден")
+    return db[cid]
+
+try:
+    read(7, {1: "Python"})
+except HTTPException as e:
+    print(e.status_code, e.detail)
+```
+> 404 Курс не найден
+= Исключение прерывает обработчик, FastAPI превращает его в ответ.
+? fill Впишите исключение FastAPI для ответа с ошибкой.
+```code
+raise ___(status_code=404, detail="Не найдено")
+```
+> HTTPException
+= detail попадает в тело ответа.
+? mc Какой код у ответа на успешное удаление без тела?
++ 204
+- 200
+- 201
+- 410
+= 204 No Content.
+
+@lesson Зависимости: Depends
+Зависимость — функция, результат которой FastAPI передаст в обработчик: `def list_courses(p: Pagination = Depends(pagination))`. Так выносят повторяющийся код: пагинацию, подключение к базе, текущего пользователя, проверку прав.
+Зависимости могут зависеть друг от друга: `get_current_user` использует `get_token`, а `require_admin` — `get_current_user`. FastAPI вызывает их по цепочке и кэширует результат в пределах запроса.
+Зависимость с `yield` выполняет код до и после запроса — так открывают и закрывают сессию базы. В тестах любую зависимость подменяют: `app.dependency_overrides[get_db] = fake_db`.
+```code
+from typing import Annotated
+from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi.testclient import TestClient
+
+app = FastAPI()
+TOKENS = {"t-ada": {"name": "Ада", "admin": True}, "t-tim": {"name": "Тимур", "admin": False}}
+
+def pagination(page: int = 1, size: int = 2):
+    return {"offset": (page - 1) * size, "limit": size}
+
+def current_user(authorization: str = Header(default="")):
+    user = TOKENS.get(authorization.removeprefix("Bearer "))
+    if not user:
+        raise HTTPException(401, "Нужно войти")
+    return user
+
+def require_admin(user: Annotated[dict, Depends(current_user)]):
+    if not user["admin"]:
+        raise HTTPException(403, "Только для админа")
+    return user
+
+COURSES = ["Python", "FastAPI", "SQL", "Docker", "Git"]
+
+@app.get("/courses")
+def courses(p: Annotated[dict, Depends(pagination)]):
+    return COURSES[p["offset"]: p["offset"] + p["limit"]]
+
+@app.get("/me")
+def me(user: Annotated[dict, Depends(current_user)]):
+    return {"name": user["name"]}
+
+@app.delete("/courses/{i}", status_code=204)
+def delete(i: int, admin: Annotated[dict, Depends(require_admin)]):
+    COURSES.pop(i)
+
+c = TestClient(app)
+print(c.get("/courses?page=2").json())                                           # ['SQL', 'Docker']
+print(c.get("/me").status_code, c.get("/me", headers={"Authorization": "Bearer t-tim"}).json())
+print(c.delete("/courses/0", headers={"Authorization": "Bearer t-tim"}).status_code)   # 403
+print(c.delete("/courses/0", headers={"Authorization": "Bearer t-ada"}).status_code)   # 204
+```
+! Повторяющийся код обработчиков — в зависимости
+! `Annotated[тип, Depends(функция)]` — современная запись
+! В тестах зависимости подменяют через `dependency_overrides`
+? mc Зачем нужна зависимость `current_user`?
++ Чтобы проверку входа и получение пользователя не дублировать в каждом обработчике
+- Чтобы ускорить ответ
+- Чтобы создать таблицу
+- Это обязательная часть каждого маршрута
+= Обработчики получают готового пользователя или 401 автоматически.
+? out Что выведет код?
+```code
+def pagination(page=1, size=2):
+    return (page - 1) * size, size
+
+items = ["Python", "FastAPI", "SQL", "Docker", "Git"]
+off, lim = pagination(page=3)
+print(items[off:off + lim], pagination(2, 10))
+```
+> ['Git'] (10, 10)
+= Третья страница по два элемента — только «Git».
+? fill Впишите функцию FastAPI для объявления зависимости.
+```code
+def me(user: dict = ___(current_user)): ...
+```
+> Depends
+= Depends(функция) — FastAPI вызовет её перед обработчиком.
+? mc Как подменить базу данных фальшивкой в тесте FastAPI?
++ app.dependency_overrides[get_db] = fake_db
+- Изменить код get_db
+- Удалить базу
+- Запустить сервер на другом порту
+= Подмена зависимостей — штатный механизм тестирования.
+
+@lesson Роутеры, async и фоновые задачи
+Большое приложение делят на модули: `router = APIRouter(prefix="/courses", tags=["courses"])` в `routers/courses.py`, а в `main.py` — `app.include_router(router)`. Типичная структура: `routers/`, `schemas.py` (Pydantic), `models.py` (база), `services/`, `deps.py`.
+`async def` нужен, когда внутри есть `await` — асинхронные запросы к базе, HTTP-клиент `httpx.AsyncClient`. Обычный `def` FastAPI выполняет в пуле потоков, поэтому блокирующий код (старые библиотеки) пишут именно в `def`, а не в `async def`.
+`BackgroundTasks` выполняет короткую работу после отправки ответа: письмо, запись в лог. Тяжёлые задачи (обработка видео, рассылки) — в очередь Celery или ARQ.
+```code
+from fastapi import APIRouter, BackgroundTasks, FastAPI
+from fastapi.testclient import TestClient
+
+sent: list[str] = []
+
+def send_welcome(email: str):
+    sent.append(f"письмо для {email}")          # в реальности — SMTP или сервис рассылок
+
+users = APIRouter(prefix="/users", tags=["users"])
+
+@users.post("", status_code=201)
+async def register(email: str, background: BackgroundTasks):
+    background.add_task(send_welcome, email)     # выполнится после ответа
+    return {"email": email}
+
+courses = APIRouter(prefix="/courses", tags=["courses"])
+
+@courses.get("")
+async def list_courses():
+    return ["Python", "FastAPI"]
+
+app = FastAPI()
+app.include_router(users)
+app.include_router(courses)
+
+c = TestClient(app)
+print(c.post("/users?email=ada@mail.kz").json(), sent)
+print(c.get("/courses").json())
+print(sorted(p for p in app.openapi()["paths"]))     # ['/courses', '/users']
+```
+! Каждая область API — свой `APIRouter`
+! `async def` — только если внутри есть `await`
+! Короткое после ответа — `BackgroundTasks`, тяжёлое — очередь
+? mc Где писать обработчик, который вызывает блокирующую библиотеку без async-поддержки?
++ В обычной `def`: FastAPI выполнит её в пуле потоков
+- В `async def`, тогда она станет асинхронной
+- В BackgroundTasks
+- Такие библиотеки нельзя использовать
+= Блокирующий вызов внутри async def остановит весь цикл событий.
+? out Что выведет код?
+```code
+tasks = []
+def add_task(fn, *args):
+    tasks.append((fn, args))
+
+def register(email):
+    add_task(print, "письмо:", email)
+    return {"email": email}
+
+resp = register("ada@mail.kz")
+print(resp)
+for fn, args in tasks:
+    fn(*args)
+```
+> {'email': 'ada@mail.kz'} письмо: ada@mail.kz
+= Фоновая задача выполняется после формирования ответа.
+? fill Впишите метод, подключающий роутер к приложению.
+```code
+app.___(courses_router)
+```
+> include_router
+= Префикс и теги задаются в APIRouter.
+? mc Что лучше для отправки 10 000 писем рассылки?
++ Очередь задач (Celery, ARQ) с отдельным воркером
+- BackgroundTasks в обработчике
+- Цикл прямо в обработчике
+- JavaScript на клиенте
+= BackgroundTasks живёт в процессе API и не переживёт перезапуск.
+
+@exam
+? mc Чем FastAPI проверяет входящие данные?
++ Аннотациями типов и моделями Pydantic
+- Регулярными выражениями вручную
+- SQL-запросами
+- Не проверяет
+= Ошибки валидации превращаются в ответ 422.
+? out Что выведет код?
+```code
+from pydantic import BaseModel, ValidationError
+
+class Item(BaseModel):
+    title: str
+    price: int
+
+try:
+    Item(title="A", price="дорого")
+except ValidationError as e:
+    print(e.error_count(), e.errors()[0]["loc"])
+```
+> 1 ('price',)
+= Ошибка одна — в поле price.
+? fill Впишите декоратор маршрута для создания ресурса.
+```code
+@app.___("/courses", status_code=201)
+```
+> post
+= POST создаёт, PUT/PATCH изменяют, DELETE удаляет.
+? mc Что вернёт обработчик, если внутри выполнено `raise HTTPException(403)`?
++ Ответ 403 с телом {"detail": "Forbidden"}
+- 200
+- 500
+- Пустой ответ 204
+= Без detail FastAPI подставит стандартный текст.
+? out Что выведет код?
+```code
+def require_admin(user):
+    if not user.get("admin"):
+        return 403
+    return 204
+
+print(require_admin({"name": "Тимур"}), require_admin({"name": "Ада", "admin": True}))
+```
+> 403 204
+= Цепочка current_user → require_admin.
+? mc Что делает `response_model`?
++ Фильтрует и проверяет данные ответа по модели
+- Проверяет параметры пути
+- Создаёт таблицу
+- Включает кэш
+= Внутренние поля не утекут клиенту.
+? fill Впишите класс для разделения API на модули.
+```code
+router = ___(prefix="/users")
+```
+> APIRouter
+= Подключается через include_router.
+? mc Как запустить FastAPI-приложение для разработки?
++ fastapi dev main.py
+- python -m django
+- npm start
+- flask run
+= В продакшене — fastapi run или uvicorn с воркерами.

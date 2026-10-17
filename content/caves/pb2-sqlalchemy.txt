@@ -1,0 +1,473 @@
+@lang id=sqlalchemy name=SQLAlchemy и Alembic land=Пещера SQLAlchemy color=#d71f00 cave=py track=pyback step=2
+@about Базы данных в Python-бэкенде: модели SQLAlchemy 2.0, сессии и запросы, связи без N+1, подключение к FastAPI и миграции Alembic.
+@why Вторая, потому что API из первой пещеры пока хранит данные в словаре и теряет их при перезапуске. Настоящий бэкенд хранит всё в PostgreSQL — а авторизация и тесты из третьей пещеры работают уже с базой.
+
+@lesson Модели и сессии
+SQLAlchemy 2.0 описывает таблицы классами: наследник `DeclarativeBase`, имя таблицы в `__tablename__`, столбцы — аннотации `Mapped[тип]` и `mapped_column(...)`. `Mapped[str | None]` — столбец может быть пустым.
+`create_engine("postgresql+psycopg://user:pass@host/db")` подключает базу (для учёбы — `sqlite://` в памяти). `Base.metadata.create_all(engine)` создаёт таблицы — в настоящих проектах вместо этого миграции Alembic.
+Работа с данными идёт через `Session`: `session.add(obj)` готовит вставку, `session.commit()` сохраняет, `session.rollback()` откатывает. После commit у объекта появляется `id` из базы.
+```code
+from sqlalchemy import String, create_engine
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
+
+class Base(DeclarativeBase):
+    pass
+
+class Course(Base):
+    __tablename__ = "courses"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    title: Mapped[str] = mapped_column(String(100), unique=True)
+    price: Mapped[int] = mapped_column(default=0)
+    description: Mapped[str | None]
+
+engine = create_engine("sqlite://", echo=False)    # echo=True покажет SQL
+Base.metadata.create_all(engine)
+
+with Session(engine) as session:
+    py = Course(title="Python", price=0)
+    session.add(py)
+    session.add_all([Course(title="FastAPI", price=4990), Course(title="SQL", price=2990)])
+    session.commit()
+    print(py.id, py.title)                         # 1 Python
+
+    course = session.get(Course, 2)                # поиск по первичному ключу
+    course.price = 3990                            # изменение отслеживается
+    session.commit()
+    print(session.get(Course, 2).price)            # 3990
+```
+! `Mapped[...]` + `mapped_column` — стиль SQLAlchemy 2.0
+! Ничего не сохранится без `commit()`
+! `with Session(...)` закрывает сессию сам
+? mc Что делает `session.commit()`?
++ Отправляет накопленные изменения в базу и фиксирует транзакцию
+- Создаёт таблицы
+- Закрывает подключение навсегда
+- Отменяет изменения
+= rollback() — отмена.
+? mc Как объявить необязательный (nullable) столбец в SQLAlchemy 2.0?
++ description: Mapped[str | None]
+- description: Mapped[str] = None
+- description: str
+- nullable в имени поля
+= Тип с None делает столбец NULL-able.
+? fill Впишите метод сессии для поиска по первичному ключу.
+```code
+course = session.___(Course, 7)
+```
+> get
+= Вернёт None, если записи нет.
+? out Что выведет код?
+```code
+from sqlalchemy import create_engine
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
+
+class Base(DeclarativeBase):
+    pass
+
+class Note(Base):
+    __tablename__ = "notes"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    text: Mapped[str]
+
+engine = create_engine("sqlite://")
+Base.metadata.create_all(engine)
+with Session(engine) as s:
+    n = Note(text="hi")
+    s.add(n)
+    print(n.id)
+    s.commit()
+    print(n.id)
+```
+> None 1
+= id присваивает база при сохранении.
+
+@lesson Запросы: select
+Запросы строят функцией `select(...)`: `select(Course).where(Course.price < 5000).order_by(Course.title).limit(10)`. Выполнение — `session.scalars(stmt).all()` (список объектов) или `session.scalar(stmt)` (одно значение).
+Условия: `==`, `!=`, `<`, `.in_([...])`, `.like("%py%")`, `.is_(None)`, несколько условий через запятую в `where` (это AND) или `or_(...)`.
+Агрегаты — из `sqlalchemy.func`: `select(func.count()).select_from(Course)`, `select(Course.level, func.avg(Course.price)).group_by(Course.level)`. Параметры подставляются безопасно — SQL-инъекции невозможны.
+```code
+from sqlalchemy import create_engine, func, or_, select
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
+
+class Base(DeclarativeBase):
+    pass
+
+class Course(Base):
+    __tablename__ = "courses"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    title: Mapped[str]
+    level: Mapped[str]
+    price: Mapped[int]
+
+engine = create_engine("sqlite://")
+Base.metadata.create_all(engine)
+with Session(engine) as s:
+    s.add_all([Course(title="Python", level="junior", price=0),
+               Course(title="FastAPI", level="middle", price=4990),
+               Course(title="SQL", level="junior", price=2990),
+               Course(title="Docker", level="middle", price=3990)])
+    s.commit()
+
+    cheap = s.scalars(select(Course.title).where(Course.price < 4000).order_by(Course.price.desc())).all()
+    print(cheap)                                                     # ['Docker', 'SQL', 'Python']
+
+    print(s.scalar(select(func.count()).select_from(Course).where(Course.level == "middle")))   # 2
+
+    rows = s.execute(select(Course.level, func.avg(Course.price)).group_by(Course.level).order_by(Course.level)).all()
+    print([(lvl, round(avg)) for lvl, avg in rows])                 # [('junior', 1495), ('middle', 4490)]
+
+    q = "py"
+    found = s.scalars(select(Course).where(or_(Course.title.ilike(f"%{q}%"), Course.price == 0))).all()
+    print([c.title for c in found])                                  # ['Python']
+```
+! `scalars(...).all()` — список объектов или значений
+! Значения в `where` передаются параметрами — безопасно
+! Агрегаты — через `func`
+? mc Что вернёт `session.scalars(select(Course)).all()`?
++ Список объектов Course
+- Одну строку
+- Количество строк
+- SQL-текст
+= scalars берёт первый столбец каждой строки — здесь это объект.
+? out Что выведет код?
+```code
+courses = [("Python", 0), ("FastAPI", 4990), ("SQL", 2990), ("Docker", 3990)]
+cheap = sorted((c for c in courses if c[1] < 4000), key=lambda c: -c[1])
+print([t for t, _ in cheap][:2])
+```
+> ['Docker', 'SQL']
+= Та же логика, что WHERE price < 4000 ORDER BY price DESC LIMIT 2.
+? fill Впишите модуль SQLAlchemy с функциями COUNT, AVG, SUM.
+```code
+select(___.count()).select_from(Course)
+```
+> func
+= func.count(), func.avg(), func.sum().
+? mc Почему `where(Course.title == user_input)` безопасен от SQL-инъекций?
++ SQLAlchemy передаёт значение отдельным параметром, а не вставляет в текст запроса
+- Python экранирует строки сам
+- SQLite не поддерживает инъекции
+- Он не безопасен
+= Опасно только склеивать SQL-строку вручную через text().
+
+@lesson Связи и проблема N+1
+Связи описывают `ForeignKey` и `relationship`: у курса много уроков — `lessons: Mapped[list["Lesson"]] = relationship(back_populates="course")`, у урока — `course_id: Mapped[int] = mapped_column(ForeignKey("courses.id"))` и `course: Mapped["Course"] = relationship(back_populates="lessons")`.
+По умолчанию связь загружается лениво: обращение `course.lessons` в цикле по 50 курсам делает 50 отдельных запросов — проблема N+1. Решение — жадная загрузка: `select(Course).options(selectinload(Course.lessons))` — всего два запроса.
+`cascade="all, delete-orphan"` удаляет уроки вместе с курсом. Для «многие ко многим» используют промежуточную таблицу (студенты ↔ курсы).
+```code
+from sqlalchemy import ForeignKey, create_engine, event, select
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, selectinload
+
+class Base(DeclarativeBase):
+    pass
+
+class Course(Base):
+    __tablename__ = "courses"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    title: Mapped[str]
+    lessons: Mapped[list["Lesson"]] = relationship(back_populates="course", cascade="all, delete-orphan")
+
+class Lesson(Base):
+    __tablename__ = "lessons"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    title: Mapped[str]
+    course_id: Mapped[int] = mapped_column(ForeignKey("courses.id"))
+    course: Mapped[Course] = relationship(back_populates="lessons")
+
+engine = create_engine("sqlite://")
+Base.metadata.create_all(engine)
+queries = []
+event.listen(engine, "before_cursor_execute", lambda *a: queries.append(1))
+
+with Session(engine) as s:
+    for name in ["Python", "FastAPI", "SQL"]:
+        s.add(Course(title=name, lessons=[Lesson(title=f"{name} {i}") for i in range(1, 4)]))
+    s.commit()
+
+with Session(engine) as s:
+    queries.clear()
+    for c in s.scalars(select(Course)):
+        _ = len(c.lessons)
+    print("лениво:", len(queries))                 # лениво: 4  (1 + 3)
+
+with Session(engine) as s:
+    queries.clear()
+    for c in s.scalars(select(Course).options(selectinload(Course.lessons))):
+        _ = len(c.lessons)
+    print("selectinload:", len(queries))           # selectinload: 2
+```
+! В списках — всегда `selectinload` для используемых связей
+! `back_populates` связывает обе стороны отношения
+! `cascade="all, delete-orphan"` — дочерние записи удаляются с родителем
+? mc Сколько запросов сделает цикл по 50 курсам с обращением к `course.lessons` без жадной загрузки?
++ 51
+- 1
+- 2
+- 50
+= Один за курсами и по одному на уроки каждого курса.
+? mc Что делает `selectinload(Course.lessons)`?
++ Загружает уроки всех найденных курсов одним дополнительным запросом
+- Удаляет уроки
+- Сортирует курсы
+- Создаёт индекс
+= Итого два запроса вместо N+1.
+? fill Впишите функцию для внешнего ключа на таблицу курсов.
+```code
+course_id: Mapped[int] = mapped_column(___("courses.id"))
+```
+> ForeignKey
+= ForeignKey("таблица.столбец").
+? out Что выведет код?
+```code
+courses = {"Python": 3, "FastAPI": 3, "SQL": 3}
+lazy = 1 + len(courses)
+eager = 2
+print(lazy, eager, lazy - eager)
+```
+> 4 2 2
+= Ленивая загрузка: 1 + N запросов, selectinload — 2.
+
+@lesson FastAPI + база данных
+Сессию отдают обработчикам зависимостью с `yield`: она открывается на время запроса и закрывается после него, даже при ошибке. Обработчик получает `db: Session = Depends(get_db)`.
+Схемы ответа читают данные прямо из объектов ORM: `model_config = ConfigDict(from_attributes=True)` в Pydantic-модели — тогда можно вернуть объект `Course`, а `response_model` превратит его в JSON.
+Код работы с базой выносят в функции-«репозитории» (`crud.py`): обработчики остаются короткими, а логику легко тестировать. Уникальность проверяют до вставки или ловят `IntegrityError` и отвечают 409.
+```code
+from typing import Annotated
+from fastapi import Depends, FastAPI, HTTPException
+from fastapi.testclient import TestClient
+from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import String, create_engine, select
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
+from sqlalchemy.pool import StaticPool
+
+class Base(DeclarativeBase):
+    pass
+
+class Course(Base):
+    __tablename__ = "courses"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    title: Mapped[str] = mapped_column(String(100), unique=True)
+    price: Mapped[int] = mapped_column(default=0)
+
+engine = create_engine("sqlite://", poolclass=StaticPool, connect_args={"check_same_thread": False})
+Base.metadata.create_all(engine)
+
+def get_db():
+    with Session(engine) as session:
+        yield session
+
+DB = Annotated[Session, Depends(get_db)]
+
+class CourseIn(BaseModel):
+    title: str = Field(min_length=2)
+    price: int = Field(default=0, ge=0)
+
+class CourseOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    title: str
+    price: int
+
+app = FastAPI()
+
+@app.post("/courses", response_model=CourseOut, status_code=201)
+def create(data: CourseIn, db: DB):
+    if db.scalar(select(Course.id).where(Course.title == data.title)):
+        raise HTTPException(409, "Такой курс уже есть")
+    course = Course(**data.model_dump())
+    db.add(course)
+    db.commit()
+    db.refresh(course)
+    return course
+
+@app.get("/courses", response_model=list[CourseOut])
+def list_courses(db: DB, max_price: int | None = None):
+    stmt = select(Course).order_by(Course.id)
+    if max_price is not None:
+        stmt = stmt.where(Course.price <= max_price)
+    return db.scalars(stmt).all()
+
+c = TestClient(app)
+print(c.post("/courses", json={"title": "FastAPI", "price": 4990}).json())
+print(c.post("/courses", json={"title": "FastAPI"}).status_code)       # 409
+c.post("/courses", json={"title": "Python"})
+print([x["title"] for x in c.get("/courses?max_price=1000").json()])   # ['Python']
+```
+! Сессия — зависимость с `yield`, одна на запрос
+! `from_attributes=True` — схема читает объект ORM
+! Повторная вставка уникального значения — ответ 409
+? mc Зачем `get_db` написана с `yield`, а не `return`?
++ Чтобы закрыть сессию после ответа, даже если обработчик упал
+- Чтобы ускорить запрос
+- Так требует SQLite
+- Чтобы получить несколько сессий
+= Код после yield выполняется после обработки запроса.
+? out Что выведет код?
+```code
+log = []
+def get_db():
+    log.append("open")
+    try:
+        yield "session"
+    finally:
+        log.append("close")
+
+gen = get_db()
+db = next(gen)
+log.append(f"handler uses {db}")
+gen.close()
+print(log)
+```
+> ['open', 'handler uses session', 'close']
+= Так FastAPI управляет зависимостью с yield.
+? fill Впишите настройку Pydantic, позволяющую читать данные из объекта ORM.
+```code
+model_config = ConfigDict(___=True)
+```
+> from_attributes
+= В Pydantic 1 это называлось orm_mode.
+? mc Где лучше держать код запросов к базе?
++ В отдельных функциях репозитория или сервиса, которые вызывают обработчики
+- Прямо в Pydantic-схемах
+- В main.py одним файлом
+- На клиенте
+= Тонкие обработчики, логика — отдельно.
+
+@lesson Миграции Alembic и PostgreSQL
+В продакшене таблицы не создают `create_all`: структура базы меняется миграциями, которые хранятся в Git. Alembic — стандарт для SQLAlchemy: `alembic init migrations`, в `env.py` указывают `target_metadata = Base.metadata`.
+Новая миграция: `alembic revision --autogenerate -m "add level to courses"` — Alembic сравнит модели с базой и сгенерирует `upgrade()` и `downgrade()`. Применить — `alembic upgrade head`, откатить — `alembic downgrade -1`. Автогенерацию всегда просматривают глазами.
+Для PostgreSQL ставят драйвер `psycopg` (или `asyncpg` для асинхронного режима), адрес берут из переменной окружения `DATABASE_URL`. Пул соединений настраивают `pool_size`, `pool_pre_ping=True`.
+```code
+# терминал
+# pip install sqlalchemy alembic "psycopg[binary]"
+# alembic init migrations
+# alembic revision --autogenerate -m "create courses"
+# alembic upgrade head
+
+# migrations/versions/20261018_add_level.py
+from alembic import op
+import sqlalchemy as sa
+
+revision = "a1b2c3d4"
+down_revision = "9f8e7d6c"
+
+def upgrade() -> None:
+    op.add_column("courses", sa.Column("level", sa.String(20), nullable=False, server_default="junior"))
+    op.create_index("ix_courses_level", "courses", ["level"])
+
+def downgrade() -> None:
+    op.drop_index("ix_courses_level", table_name="courses")
+    op.drop_column("courses", "level")
+
+# app/db.py
+# import os
+# engine = create_engine(os.environ["DATABASE_URL"], pool_size=10, pool_pre_ping=True)
+# DATABASE_URL=postgresql+psycopg://app:secret@db:5432/school
+```
+! Структура базы — только миграциями, не `create_all`
+! Автогенерированную миграцию проверяйте перед применением
+! Новый NOT NULL столбец — с `server_default`, иначе миграция упадёт на старых строках
+? mc Что делает `alembic upgrade head`?
++ Применяет к базе все ещё не выполненные миграции до последней
+- Создаёт новую миграцию
+- Откатывает последнюю миграцию
+- Удаляет базу
+= Alembic хранит текущую версию в таблице alembic_version.
+? mc Почему новый NOT NULL столбец добавляют с server_default?
++ В таблице уже есть строки, и им нужно значение, иначе миграция упадёт
+- Так быстрее
+- Без этого не работает индекс
+- Это требование Python
+= Альтернатива — добавить nullable, заполнить, затем сделать NOT NULL.
+? fill Впишите команду Alembic, создающую миграцию по разнице моделей и базы.
+```code
+alembic revision ___ -m "add level"
+```
+> --autogenerate
+= Сгенерированный код нужно проверить вручную.
+? out Что выведет код?
+```code
+applied = ["create_courses", "add_level"]
+all_revisions = ["create_courses", "add_level", "add_lessons", "add_index"]
+pending = [r for r in all_revisions if r not in applied]
+print(len(pending), pending[-1])
+```
+> 2 add_index
+= upgrade head выполнит две оставшиеся миграции по порядку.
+
+@exam
+? mc Что нужно, чтобы изменения объекта сохранились в базе?
++ Вызвать session.commit()
+- Изменить атрибут объекта, этого достаточно
+- Вызвать print(obj)
+- Закрыть Python
+= Изменения отслеживаются, но фиксируются только при commit.
+? fill Впишите функцию построения запроса в SQLAlchemy 2.0.
+```code
+stmt = ___(Course).where(Course.price < 5000)
+```
+> select
+= Выполнение — session.scalars(stmt).
+? out Что выведет код?
+```code
+from sqlalchemy import create_engine, func, select
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
+
+class Base(DeclarativeBase):
+    pass
+
+class Order(Base):
+    __tablename__ = "orders"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    total: Mapped[int]
+
+engine = create_engine("sqlite://")
+Base.metadata.create_all(engine)
+with Session(engine) as s:
+    s.add_all([Order(total=t) for t in (100, 250, 650)])
+    s.commit()
+    print(s.scalar(select(func.sum(Order.total))), s.scalar(select(func.count()).select_from(Order).where(Order.total > 200)))
+```
+> 1000 2
+= Сумма всех заказов и число заказов дороже 200.
+? mc Как избавиться от N+1 при выводе курсов с уроками?
++ select(Course).options(selectinload(Course.lessons))
+- Загружать уроки по одному в цикле
+- Убрать связь
+- Увеличить пул соединений
+= Жадная загрузка связи.
+? mc Зачем Alembic, если есть Base.metadata.create_all?
++ create_all только создаёт отсутствующие таблицы, а миграции изменяют существующие и хранят историю
+- Alembic быстрее создаёт таблицы
+- create_all не работает с PostgreSQL
+- Они не связаны
+= Добавить столбец в рабочую базу create_all не умеет.
+? out Что выведет код?
+```code
+from pydantic import BaseModel, ConfigDict
+
+class Row:
+    def __init__(self):
+        self.id, self.title, self.secret = 1, "SQL", "x"
+
+class Out(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    title: str
+
+print(Out.model_validate(Row()).model_dump())
+```
+> {'id': 1, 'title': 'SQL'}
+= Схема прочитала атрибуты объекта и пропустила лишнее поле.
+? fill Впишите драйвер в адресе подключения к PostgreSQL через psycopg 3.
+```code
+postgresql+___://app:secret@db:5432/school
+```
+> psycopg
+= Для async — postgresql+asyncpg.
+? mc Что вернуть, если клиент создаёт курс с уже существующим уникальным названием?
++ 409 Conflict
+- 200 и дубликат
+- 500 из-за IntegrityError
+- 404
+= Ошибку базы нужно превратить в понятный ответ.

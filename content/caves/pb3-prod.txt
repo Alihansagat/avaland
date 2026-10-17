@@ -1,0 +1,451 @@
+@lang id=pyprod name=Боевой бэкенд на Python land=Пещера продакшена color=#3776ab cave=py track=pyback step=3
+@about Всё, что отличает учебное API от рабочего: пароли и JWT, тесты на pytest, настройки и логи, фоновые задачи и кэш, Docker и деплой.
+@why Последняя, потому что защищает и выпускает в мир API с базой из первых двух пещер. Именно эти темы спрашивают на собеседовании Python-бэкендера после вопросов про FastAPI и SQL.
+
+@lesson Пароли и вход по токену
+Пароли никогда не хранят открытым текстом: в базе лежит только хеш `bcrypt` (или argon2). При входе хешируют введённый пароль и сравнивают через `bcrypt.checkpw` — сам пароль восстановить нельзя.
+После успешного входа сервер выдаёт токен доступа. Стандарт — JWT: подписанная строка `заголовок.данные.подпись`, где в данных `sub` (id пользователя) и `exp` (срок действия). Сервер проверяет подпись своим секретом и не ходит в базу за сессией. Данные JWT не зашифрованы — не кладите туда секреты.
+В FastAPI вход делают через `OAuth2PasswordRequestForm` на `/token`, а защищённые маршруты получают пользователя зависимостью с `OAuth2PasswordBearer` — и кнопка Authorize появляется в `/docs`.
+```code
+import base64, hashlib, hmac, json, time
+import bcrypt
+
+# 1. Хеш пароля: соль внутри хеша, у одинаковых паролей разные хеши
+hashed = bcrypt.hashpw("secret123".encode(), bcrypt.gensalt())
+print(bcrypt.checkpw("secret123".encode(), hashed), bcrypt.checkpw("Secret123".encode(), hashed))   # True False
+
+# 2. Как устроен JWT (HS256) — в проекте используйте библиотеку PyJWT: jwt.encode / jwt.decode
+SECRET = b"change-me"
+b64 = lambda b: base64.urlsafe_b64encode(b).rstrip(b"=").decode()
+
+def make_token(user_id: int, ttl: int = 3600) -> str:
+    header = b64(json.dumps({"alg": "HS256", "typ": "JWT"}).encode())
+    payload = b64(json.dumps({"sub": str(user_id), "exp": int(time.time()) + ttl}).encode())
+    sig = b64(hmac.new(SECRET, f"{header}.{payload}".encode(), hashlib.sha256).digest())
+    return f"{header}.{payload}.{sig}"
+
+def read_token(token: str) -> int:
+    header, payload, sig = token.split(".")
+    good = b64(hmac.new(SECRET, f"{header}.{payload}".encode(), hashlib.sha256).digest())
+    if not hmac.compare_digest(sig, good):
+        raise ValueError("подпись не совпала")
+    data = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+    if data["exp"] < time.time():
+        raise ValueError("токен истёк")
+    return int(data["sub"])
+
+t = make_token(42)
+print(t.count("."), read_token(t))                  # 2 42
+fake = t[:-2] + ("AA" if not t.endswith("AA") else "BB")
+try:
+    read_token(fake)
+except ValueError as e:
+    print(e)                                        # подпись не совпала
+```
+! В базе — только хеш пароля
+! JWT подписан, но не зашифрован: никаких секретов внутри
+! У токена доступа короткий срок жизни (`exp`)
+? mc Как правильно хранить пароли пользователей?
++ Только хеш bcrypt или argon2 с солью
+- Открытым текстом в отдельной таблице
+- Зашифрованными обратимым шифром
+- В JWT
+= Даже при утечке базы пароли не узнать.
+? mc Можно ли прочитать данные внутри JWT без секретного ключа?
++ Да, они только закодированы base64, а секрет нужен для проверки подписи
+- Нет, они зашифрованы
+- Только на сервере
+- Только с паролем пользователя
+= Поэтому в JWT не кладут пароли и персональные данные.
+? fill Впишите поле JWT со сроком действия токена.
+```code
+payload = {"sub": "42", "___": 1760000000}
+```
+> exp
+= sub — кому выдан, exp — до какого момента действует.
+? out Что выведет код?
+```code
+token = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiI0MiJ9.c2ln"
+header, payload, sig = token.split(".")
+print(len(token.split(".")), sig)
+```
+> 3 c2ln
+= Три части через точку: заголовок, данные, подпись.
+
+@lesson Тесты на pytest
+Тесты Python-бэкенда пишут на pytest: файл `tests/test_*.py`, функции `test_*`, проверки обычным `assert`. Запуск — `pytest -q`. Фикстуры (`@pytest.fixture`) готовят данные и клиента для каждого теста.
+API тестируют через `TestClient(app)`: отправляют запрос и проверяют код и JSON. Базу в тестах подменяют: `app.dependency_overrides[get_db] = override` на SQLite в памяти или тестовую PostgreSQL в Docker. `@pytest.mark.parametrize` прогоняет один тест на многих входных данных.
+Хороший набор: успешный сценарий, ошибки валидации (422), отсутствие прав (401/403), «не найдено» (404), граничные значения. Покрытие считает `pytest --cov`.
+```code
+from fastapi import Depends, FastAPI, HTTPException
+from fastapi.testclient import TestClient
+
+# --- приложение ---
+app = FastAPI()
+def get_db():
+    return {"ada@mail.kz": {"name": "Ада", "balance": 1000}}
+
+@app.post("/buy")
+def buy(email: str, price: int, db: dict = Depends(get_db)):
+    user = db.get(email)
+    if not user:
+        raise HTTPException(404, "нет пользователя")
+    if price <= 0:
+        raise HTTPException(422, "цена должна быть больше нуля")
+    if user["balance"] < price:
+        raise HTTPException(402, "мало денег")
+    user["balance"] -= price
+    return {"left": user["balance"]}
+
+# --- тесты (в проекте: tests/test_buy.py, запуск pytest -q) ---
+def fake_db():
+    return {"t@mail.kz": {"name": "Тест", "balance": 500}}
+
+app.dependency_overrides[get_db] = fake_db
+client = TestClient(app)
+
+def test_buy_ok():
+    r = client.post("/buy", params={"email": "t@mail.kz", "price": 200})
+    assert r.status_code == 200 and r.json() == {"left": 300}
+
+def test_errors():
+    cases = [("x@mail.kz", 100, 404), ("t@mail.kz", 0, 422), ("t@mail.kz", 900, 402)]
+    for email, price, code in cases:                 # в pytest — @pytest.mark.parametrize
+        assert client.post("/buy", params={"email": email, "price": price}).status_code == code
+
+for test in (test_buy_ok, test_errors):
+    test()
+    print("ok", test.__name__)
+```
+! Тест = подготовка, действие, проверка
+! База и внешние сервисы в тестах — подменённые
+! Проверяйте не только успех, но и все коды ошибок
+? mc Как в pytest проверить условие?
++ Обычным assert
+- self.assertEqual
+- print и глазами
+- if и return
+= pytest подробно показывает, что не совпало.
+? out Что выведет код?
+```code
+def add(a, b):
+    return a + b
+
+cases = [(1, 2, 3), (0, 0, 0), (-1, 1, 1)]
+failed = [c for c in cases if add(c[0], c[1]) != c[2]]
+print(len(cases) - len(failed), "passed,", len(failed), "failed")
+```
+> 2 passed, 1 failed
+= Третий случай ожидает 1, а получается 0 — как parametrize с одним красным тестом.
+? fill Впишите декоратор pytest для запуска одного теста на разных данных.
+```code
+@pytest.mark.___("price, code", [(0, 422), (100, 200)])
+```
+> parametrize
+= Каждый набор — отдельный тест в отчёте.
+? mc Зачем `app.dependency_overrides` в тестах?
++ Подменить базу или внешний сервис фальшивкой без изменения кода приложения
+- Ускорить FastAPI
+- Отключить валидацию
+- Включить документацию
+= Тесты не трогают рабочую базу.
+
+@lesson Настройки, логи и middleware
+Настройки (адрес базы, секреты, режим) читают из переменных окружения, а не пишут в код. Стандарт — класс `Settings(BaseSettings)` из пакета `pydantic-settings`: поля с типами, значения из окружения и `.env`, ошибка при старте, если обязательного нет. Файл `.env` — в `.gitignore`.
+Логи пишут модулем `logging`, а не `print`: уровни DEBUG/INFO/WARNING/ERROR, время, имя модуля. В продакшене логи выводят в формате JSON — их собирают Loki, ELK или облако.
+Middleware оборачивает каждый запрос: замер времени, id запроса, CORS (`CORSMiddleware` для фронтенда на другом домене). Простой способ — декоратор `@app.middleware("http")`, быстрый — класс «чистого» ASGI-middleware, как в примере. Ошибки отправляют в Sentry.
+```code
+import logging, os, time
+from fastapi import FastAPI, Request
+from fastapi.testclient import TestClient
+from pydantic import BaseModel, Field
+
+# в проекте: from pydantic_settings import BaseSettings — читает окружение и .env сам
+class Settings(BaseModel):
+    app_name: str = "AVALAND API"
+    debug: bool = False
+    database_url: str
+    jwt_secret: str = Field(min_length=16)
+
+os.environ.setdefault("DATABASE_URL", "sqlite://")
+os.environ.setdefault("JWT_SECRET", "x" * 32)
+settings = Settings(**{k.lower(): v for k, v in os.environ.items() if k.lower() in Settings.model_fields})
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+log = logging.getLogger("api")
+
+class TimingMiddleware:                                # чистый ASGI-middleware
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        start = time.perf_counter()
+
+        async def send_with_time(message):
+            if message["type"] == "http.response.start":
+                ms = (time.perf_counter() - start) * 1000
+                message["headers"] = [*message.get("headers", []), (b"x-process-time", f"{ms:.1f}".encode())]
+                log.info("%s %s -> %s", scope["method"], scope["path"], message["status"])
+            await send(message)
+
+        await self.app(scope, receive, send_with_time)
+
+app = FastAPI(title=settings.app_name)
+app.add_middleware(TimingMiddleware)
+
+@app.get("/health")
+async def health():
+    return {"status": "ok", "debug": settings.debug}
+
+r = TestClient(app).get("/health")
+print(r.json(), "x-process-time" in r.headers)       # {'status': 'ok', 'debug': False} True
+```
+! Секреты — в переменных окружения, `.env` — не в Git
+! `logging` вместо `print`
+! Эндпоинт `/health` нужен балансировщику и Docker
+? mc Где хранить секрет для подписи JWT?
++ В переменной окружения или менеджере секретов, а в коде читать через настройки
+- В коде в main.py
+- В README
+- В JWT
+= Секрет в репозитории считается раскрытым.
+? out Что выведет код?
+```code
+import os
+os.environ["DEBUG"] = "false"
+debug = os.environ.get("DEBUG", "true").lower() in ("1", "true", "yes")
+port = int(os.environ.get("PORT", "8000"))
+print(debug, port + 1)
+```
+> False 8001
+= Переменные окружения — всегда строки, их нужно приводить к типам.
+? fill Впишите middleware FastAPI, разрешающий запросы фронтенда с другого домена.
+```code
+app.add_middleware(___, allow_origins=["https://avaland.kz"])
+```
+> CORSMiddleware
+= Без CORS браузер заблокирует запросы с другого домена.
+? mc Зачем эндпоинт /health?
++ По нему балансировщик и Docker проверяют, что сервис жив
+- Для регистрации пользователей
+- Для документации
+- Для удаления данных
+= Неживой контейнер автоматически перезапустят.
+
+@lesson Очереди, кэш и асинхронность
+Долгие задачи (письма, отчёты, обработка файлов) выносят в очередь: API кладёт задачу в брокер (Redis, RabbitMQ), отдельный процесс-воркер выполняет её. Популярные инструменты — Celery, ARQ, Dramatiq. Задача должна выдерживать повторный запуск (идемпотентность).
+Кэш в Redis хранит результаты тяжёлых запросов: `cache.get(key)` → если нет, посчитать и `cache.set(key, value, ex=600)`. При изменении данных ключ удаляют. Redis же используют для ограничения частоты запросов (rate limit).
+Асинхронный стек: `async def` обработчики, `AsyncSession` и драйвер `asyncpg`, `httpx.AsyncClient` для внешних API, `asyncio.gather` для параллельных запросов. Асинхронность ускоряет ожидание сети, но не тяжёлые вычисления.
+```code
+import asyncio, time
+
+# кэш с временем жизни — в проекте Redis: r.get / r.set(key, value, ex=600)
+class TTLCache:
+    def __init__(self):
+        self.data: dict[str, tuple[float, object]] = {}
+    def get(self, key):
+        item = self.data.get(key)
+        if item and item[0] > time.monotonic():
+            return item[1]
+        self.data.pop(key, None)
+        return None
+    def set(self, key, value, ex: float):
+        self.data[key] = (time.monotonic() + ex, value)
+
+cache, calls = TTLCache(), []
+
+def top_courses():
+    if (hit := cache.get("top")) is not None:
+        return hit
+    calls.append("SQL")                       # тяжёлый запрос к базе
+    result = ["Python", "FastAPI", "SQL"]
+    cache.set("top", result, ex=600)
+    return result
+
+for _ in range(3):
+    top_courses()
+print("запросов к базе:", len(calls))           # запросов к базе: 1
+
+# параллельные запросы к внешним API — в проекте httpx.AsyncClient
+async def fetch(name: str, delay: float) -> str:
+    await asyncio.sleep(delay)
+    return name
+
+async def main():
+    start = time.perf_counter()
+    res = await asyncio.gather(fetch("курсы", 0.2), fetch("цены", 0.2), fetch("отзывы", 0.2))
+    return res, round(time.perf_counter() - start, 1)
+
+print(asyncio.run(main()))                      # (['курсы', 'цены', 'отзывы'], 0.2) — не 0.6
+```
+! Всё долгое — в очередь, пользователь не ждёт
+! Кэш нужно сбрасывать при изменении данных
+! `asyncio.gather` — несколько ожиданий одновременно
+? mc Зачем отправлять письмо о регистрации через очередь Celery?
++ Ответ пользователю не ждёт почтовый сервер, а при сбое задачу можно повторить
+- Так письма красивее
+- FastAPI не умеет отправлять письма
+- Очередь шифрует письма
+= Воркер выполняет задачу отдельно от API.
+? out Что выведет код?
+```code
+import asyncio, time
+
+async def job(d):
+    await asyncio.sleep(d)
+    return d
+
+async def main():
+    t = time.perf_counter()
+    r = await asyncio.gather(job(0.1), job(0.1), job(0.1))
+    return sum(r), round(time.perf_counter() - t, 1)
+
+print(asyncio.run(main()))
+```
+> (0.30000000000000004, 0.1)
+> (0.3, 0.1)
+= Три ожидания по 0.1 с идут одновременно — всего около 0.1 с. Сумма float — с погрешностью.
+? fill Впишите функцию asyncio для одновременного выполнения нескольких корутин.
+```code
+results = await asyncio.___(a(), b(), c())
+```
+> gather
+= Возвращает результаты в том же порядке.
+? mc Поможет ли async def ускорить обработчик, который 2 секунды считает нейросеть на CPU?
++ Нет: async ускоряет ожидание ввода-вывода, а вычисления нужно выносить в отдельный процесс или воркер
+- Да, в 2 раза
+- Да, если добавить await
+- Только с Redis
+= Тяжёлый CPU-код в async def заблокирует все запросы.
+
+@lesson Docker и деплой
+Python-API упаковывают в Docker-образ: базовый `python:3.13-slim`, сначала зависимости (`requirements.txt` или `uv`), потом код — так работает кэш слоёв. Запуск — `fastapi run` или `uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4`.
+Docker Compose поднимает API вместе с PostgreSQL и Redis; миграции выполняют перед стартом (`alembic upgrade head`). Приложение без root-пользователя, секреты — переменными окружения.
+Куда выкладывать: Render, Railway, Fly.io (просто), свой VPS с Docker и Caddy/Nginx для HTTPS, или облако (AWS, GCP, Yandex Cloud). CI на GitHub Actions прогоняет `pytest` и собирает образ на каждый коммит.
+```code
+# Dockerfile
+# FROM python:3.13-slim
+# WORKDIR /app
+# ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+# COPY requirements.txt .
+# RUN pip install --no-cache-dir -r requirements.txt
+# COPY . .
+# RUN useradd -m app && chown -R app /app
+# USER app
+# EXPOSE 8000
+# CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4"]
+
+# compose.yaml
+# services:
+#   api:
+#     build: .
+#     ports: ["8000:8000"]
+#     environment:
+#       DATABASE_URL: postgresql+psycopg://app:${DB_PASSWORD}@db:5432/app
+#       REDIS_URL: redis://cache:6379/0
+#     depends_on:
+#       db: { condition: service_healthy }
+#   db:
+#     image: postgres:17
+#     environment: { POSTGRES_USER: app, POSTGRES_PASSWORD: "${DB_PASSWORD}", POSTGRES_DB: app }
+#     healthcheck: { test: ["CMD-SHELL", "pg_isready -U app"], interval: 5s }
+#   cache:
+#     image: redis:7-alpine
+
+# .github/workflows/ci.yml — шаги: checkout → setup-python → pip install → pytest -q → docker build
+
+workers = 2 * 2 + 1          # частая формула: 2 × ядра + 1
+print(f"uvicorn app.main:app --workers {workers}")
+```
+! Зависимости копируют в образ раньше кода
+! Миграции — перед запуском новой версии
+! Без root и без секретов в образе
+? mc Почему в Dockerfile сначала копируют requirements.txt и ставят зависимости, а потом код?
++ Чтобы при изменении кода не переустанавливать зависимости — слой берётся из кэша
+- Так требует Python
+- Чтобы образ был больше
+- Иначе uvicorn не запустится
+= Порядок шагов определяет эффективность кэша.
+? out Что выведет код?
+```code
+cores = 4
+workers = 2 * cores + 1
+cmd = ["uvicorn", "app.main:app", "--workers", str(workers)]
+print(" ".join(cmd[-2:]), len(cmd))
+```
+> --workers 9 4
+= Число воркеров по формуле 2 × ядра + 1.
+? fill Впишите адрес, на котором сервер в контейнере должен слушать, чтобы быть доступным снаружи.
+```code
+uvicorn app.main:app --host ___ --port 8000
+```
+> 0.0.0.0
+= 127.0.0.1 внутри контейнера недоступен с хоста.
+? mc Когда выполнять `alembic upgrade head` при выкатке?
++ До запуска новой версии приложения, которая ожидает новую схему
+- Никогда
+- Только вручную раз в год
+- После удаления старой базы
+= Иначе новый код обратится к несуществующим столбцам.
+
+@exam
+? mc Что хранить в базе вместо пароля пользователя?
++ Хеш bcrypt или argon2
+- Пароль в base64
+- Пароль, зашифрованный AES с ключом в коде
+- JWT
+= Хеш нельзя превратить обратно в пароль.
+? fill Впишите функцию bcrypt для проверки пароля.
+```code
+ok = bcrypt.___(password.encode(), hashed)
+```
+> checkpw
+= hashpw создаёт хеш, checkpw сравнивает.
+? out Что выведет код?
+```code
+import base64, json
+payload = base64.urlsafe_b64encode(json.dumps({"sub": "7"}).encode()).decode().rstrip("=")
+data = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+print(data["sub"], type(data["sub"]).__name__)
+```
+> 7 str
+= Данные JWT читаются без секрета — это просто base64.
+? mc Тест проверяет только успешный ответ 200. Чего не хватает?
++ Проверок ошибок: 401/403, 404, 422 и граничных значений
+- Ничего, этого достаточно
+- Скриншотов
+- Комментариев
+= Большинство багов прячется в сценариях ошибок.
+? mc Где взять адрес базы данных в продакшене?
++ Из переменной окружения DATABASE_URL через класс настроек
+- Записать в коде
+- Спросить у пользователя
+- Из JWT
+= Один и тот же образ работает в разных окружениях.
+? out Что выведет код?
+```code
+import time
+store = {"top": (time.monotonic() - 1, ["old"])}
+
+def get(key):
+    exp, value = store.get(key, (0, None))
+    return value if exp > time.monotonic() else None
+
+print(get("top"), get("missing"))
+```
+> None None
+= Ключ с истёкшим сроком считается отсутствующим.
+? fill Впишите команду запуска тестов pytest в кратком режиме.
+```code
+pytest ___
+```
+> -q
+= -q — quiet, -x — остановиться на первой ошибке.
+? mc Что лучше для 50 параллельных запросов к внешнему API в async-обработчике?
++ httpx.AsyncClient и asyncio.gather
+- requests в цикле
+- time.sleep между запросами
+- 50 отдельных серверов
+= Ожидания сети идут одновременно.
