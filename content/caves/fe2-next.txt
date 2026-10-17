@@ -1,0 +1,298 @@
+@lang id=next name=Next.js land=Пещера Next.js color=#8a96a8 cave=js track=fe step=2
+@about Фреймворк на React: маршрутизация по файлам, серверный рендеринг, загрузка данных и деплой.
+@why Вторая, потому что Next.js — это React-компоненты плюс сервер. Сначала нужно уверенно писать компоненты и хуки, потом решать, где они выполняются — в браузере или на сервере.
+
+@lesson App Router и страницы
+В Next.js маршруты задаются папками внутри `app/`: файл `app/page.tsx` — главная, `app/blog/page.tsx` — страница `/blog`. Динамический сегмент — папка в квадратных скобках: `app/blog/[slug]/page.tsx` отвечает на `/blog/hello`.
+`layout.tsx` оборачивает все страницы своей папки: шапка и меню рисуются один раз и не перерисовываются при переходах. `loading.tsx` показывается во время загрузки, `error.tsx` — при ошибке, `not-found.tsx` — для 404.
+Ссылки между страницами делает компонент `<Link href="/blog">` — переход происходит без перезагрузки, а Next.js заранее подгружает страницы из видимых ссылок.
+```code
+// app/layout.tsx
+export default function RootLayout({ children }) {
+  return (
+    <html lang="ru">
+      <body>
+        <header><a href="/">AVALAND Blog</a></header>
+        {children}
+      </body>
+    </html>
+  );
+}
+
+// app/blog/[slug]/page.tsx
+import Link from "next/link";
+import { notFound } from "next/navigation";
+
+const posts = { hello: "Первый пост", react: "Почему React" };
+
+export default async function Post({ params }) {
+  const { slug } = await params;
+  const title = posts[slug];
+  if (!title) notFound();
+  return <article><h1>{title}</h1><Link href="/blog">← все посты</Link></article>;
+}
+```
+! Папка — сегмент URL, `page.tsx` делает его страницей
+! `layout.tsx` сохраняет состояние при переходах между дочерними страницами
+! Внутренние ссылки — через `<Link>`, а не `<a>`
+? mc Какой файл отвечает за адрес `/shop/42`?
++ app/shop/[id]/page.tsx
+- pages/shop-42.html
+- app/shop/42.tsx
+- app/[shop]/42/layout.tsx
+= [id] — динамический сегмент, page.tsx делает его страницей.
+? mc Для чего `layout.tsx`?
++ Общая обёртка для страниц папки: шапка, меню; не перерисовывается при переходах
+- Для стилей CSS
+- Для API
+- Для тестов
+= Layout оборачивает children и сохраняет состояние.
+? fill Впишите компонент Next.js для перехода между страницами без перезагрузки.
+```code
+<___ href="/about">О нас</___>
+```
+> Link
+= Link из next/link делает клиентский переход и предзагрузку.
+? out Что выведет код?
+```code
+const match = (pattern, path) => {
+  const p = pattern.split("/"), s = path.split("/");
+  if (p.length !== s.length) return null;
+  const params = {};
+  for (let i = 0; i < p.length; i++) {
+    if (p[i].startsWith("[")) params[p[i].slice(1, -1)] = s[i];
+    else if (p[i] !== s[i]) return null;
+  }
+  return params;
+};
+console.log(JSON.stringify(match("/blog/[slug]", "/blog/hello")), match("/blog/[slug]", "/shop/x"));
+```
+> {"slug":"hello"} null
+= Так упрощённо работает сопоставление динамических маршрутов.
+
+@lesson Серверные и клиентские компоненты
+В App Router компоненты по умолчанию серверные: они выполняются на сервере, могут быть `async`, напрямую ходить в базу и не попадают в JavaScript браузера. Это быстрее и безопаснее: секретные ключи остаются на сервере.
+Если компоненту нужны состояние, эффекты или обработчики кликов, в начале файла пишут `"use client"` — это клиентский компонент. Хорошая практика — держать клиентские компоненты маленькими «островками» интерактивности внутри серверных страниц.
+Серверный компонент может передать клиентскому данные через props, но только сериализуемые: строки, числа, объекты, массивы — не функции.
+```code
+// app/products/page.tsx — серверный компонент
+import AddToCart from "./AddToCart";
+
+async function getProducts() {
+  const res = await fetch("https://api.example.com/products", { next: { revalidate: 60 } });
+  return res.json();
+}
+
+export default async function Products() {
+  const products = await getProducts();          // выполняется на сервере
+  return (
+    <ul>
+      {products.map(p => (
+        <li key={p.id}>{p.name} — {p.price} ₸ <AddToCart id={p.id} /></li>
+      ))}
+    </ul>
+  );
+}
+
+// app/products/AddToCart.tsx — клиентский островок
+"use client";
+import { useState } from "react";
+export default function AddToCart({ id }) {
+  const [added, setAdded] = useState(false);
+  return <button onClick={() => setAdded(true)}>{added ? "В корзине" : "В корзину"}</button>;
+}
+```
+! По умолчанию компонент серверный; `"use client"` — только где нужна интерактивность
+! В серверных компонентах нельзя `useState`, `useEffect` и обработчики событий
+! Секреты (ключи API, пароли БД) — только в серверном коде и переменных окружения без префикса `NEXT_PUBLIC_`
+? mc Компоненту нужен `useState`. Что сделать?
++ Добавить "use client" в начало файла компонента
+- Сделать его async
+- Перенести в папку api
+- Ничего, хуки работают везде
+= Хуки состояния работают только в клиентских компонентах.
+? mc Почему запрос к базе лучше делать в серверном компоненте?
++ Ключи и логика не уходят в браузер, а пользователь получает готовый HTML быстрее
+- Серверные компоненты не умеют рендерить
+- Браузер не поддерживает fetch
+- Так требует CSS
+= Серверный код не попадает в клиентский бандл.
+? fill Впишите директиву, которая делает файл клиентским компонентом.
+```code
+"___";
+```
+> use client
+= Директива ставится первой строкой файла.
+? mc Какую переменную окружения увидит браузер?
++ NEXT_PUBLIC_API_URL
+- DATABASE_PASSWORD
+- SECRET_KEY
+- API_TOKEN
+= В клиентский код попадают только переменные с префиксом NEXT_PUBLIC_.
+
+@lesson Данные, кэш и Server Actions
+`fetch` в серверных компонентах Next.js умеет кэшировать: `{ cache: "force-cache" }` — статично, `{ next: { revalidate: 60 } }` — обновлять раз в минуту, `{ cache: "no-store" }` — каждый раз свежие данные. Это определяет, будет страница статической или динамической.
+Server Actions — функции с `"use server"`, которые можно вызвать из формы: `<form action={createPost}>`. Они выполняются на сервере, могут писать в базу и после изменения вызывают `revalidatePath`, чтобы страница показала новые данные.
+Route Handlers (`app/api/.../route.ts`) — обычные API-эндпоинты с функциями `GET`, `POST`, возвращающими `Response`. Их используют для вебхуков и внешних клиентов.
+```code
+// app/posts/page.tsx
+import { revalidatePath } from "next/cache";
+import { db } from "@/lib/db";
+
+async function createPost(formData) {
+  "use server";
+  const title = String(formData.get("title") || "").trim();
+  if (title.length < 3) return;
+  await db.post.create({ data: { title } });
+  revalidatePath("/posts");
+}
+
+export default async function Posts() {
+  const posts = await db.post.findMany({ orderBy: { id: "desc" } });
+  return (
+    <>
+      <form action={createPost}><input name="title" /><button>Создать</button></form>
+      <ul>{posts.map(p => <li key={p.id}>{p.title}</li>)}</ul>
+    </>
+  );
+}
+
+// app/api/health/route.ts
+export async function GET() {
+  return Response.json({ ok: true, time: Date.now() });
+}
+```
+! Всегда проверяйте данные в Server Action: это открытый эндпоинт
+! После изменения данных — `revalidatePath` или `revalidateTag`
+! `no-store` для персональных данных, `revalidate` — для каталога и блога
+? mc Что делает `{ next: { revalidate: 60 } }` в fetch?
++ Кэширует ответ и обновляет его не чаще раза в 60 секунд
+- Повторяет запрос 60 раз
+- Ждёт 60 секунд перед запросом
+- Отключает кэш
+= Это инкрементальная регенерация: быстрые страницы с периодически свежими данными.
+? fill Впишите функцию, которая сбрасывает кэш страницы после изменения данных.
+```code
+___("/posts");
+```
+> revalidatePath
+= revalidatePath из next/cache.
+? mc Где описать эндпоинт `GET /api/health`?
++ app/api/health/route.ts с функцией GET
+- app/api/health/page.tsx
+- pages/health.html
+- next.config.js
+= Route Handler экспортирует функции по HTTP-методам.
+? out Что выведет код?
+```code
+const form = new Map([["title", "  Hi "]]);
+const title = String(form.get("title") || "").trim();
+console.log(title.length >= 3 ? "create" : "skip", JSON.stringify(title));
+```
+> skip "Hi"
+= После trim остаётся 2 символа — валидация не пропускает.
+
+@lesson Оптимизация и деплой
+Next.js оптимизирует ресурсы: `next/image` сжимает и подгоняет картинки под экран, `next/font` загружает шрифты без скачков текста, метаданные страниц задаются через `export const metadata` или `generateMetadata` — это важно для SEO.
+Перед деплоем запускают `next build`: он покажет, какие страницы статические, какие динамические, и найдёт ошибки типов. Переменные окружения задают в `.env.local` локально и в настройках хостинга в проде.
+Проще всего деплоить на Vercel (подключить репозиторий GitHub), также подходят Docker на любом сервере или `output: "export"` для полностью статического сайта.
+```code
+// app/blog/[slug]/page.tsx
+import Image from "next/image";
+
+export async function generateMetadata({ params }) {
+  const { slug } = await params;
+  return { title: `${slug} — блог`, description: "Статья в блоге AVALAND" };
+}
+
+export default async function Page({ params }) {
+  const { slug } = await params;
+  return (
+    <article>
+      <Image src={`/covers/${slug}.jpg`} alt="Обложка" width={800} height={400} priority />
+    </article>
+  );
+}
+
+// package.json
+// "scripts": { "dev": "next dev", "build": "next build", "start": "next start" }
+```
+! Всегда задавайте `alt`, `width` и `height` для `Image`
+! `next build` перед каждым деплоем — ловит ошибки до продакшена
+! Секреты — в переменных окружения хостинга, не в репозитории
+? mc Зачем `next/image` вместо обычного `<img>`?
++ Автоматически сжимает, подбирает размер под экран и лениво загружает картинки
+- Только для SVG
+- Чтобы картинки нельзя было скачать
+- Это обязательное требование React
+= Оптимизация картинок заметно ускоряет загрузку страниц.
+? fill Впишите команду, которая собирает продакшен-версию.
+```code
+npm run ___
+```
+> build
+= next build собирает и проверяет приложение.
+? mc Как задать заголовок страницы для поисковиков в App Router?
++ export const metadata или функция generateMetadata в page/layout
+- document.title в useEffect
+- Через CSS
+- В .env
+= Метаданные рендерятся на сервере в head.
+? mc Где хранить ключ платёжного API для продакшена?
++ В переменных окружения хостинга
+- В коде компонента
+- В публичной папке public
+- В README
+= Секреты не должны попадать в репозиторий и клиентский код.
+
+@exam
+? mc Чем серверный компонент отличается от клиентского?
++ Выполняется на сервере, может быть async и обращаться к базе, но без useState и обработчиков
+- Работает только без интернета
+- Всегда медленнее
+- Ничем
+= Серверные компоненты не отправляют свой код в браузер.
+? mc Какой путь у файла `app/(shop)/cart/page.tsx`?
++ /cart — папка в круглых скобках не попадает в URL
+- /(shop)/cart
+- /shop/cart
+- /page
+= Группы маршрутов в скобках организуют код, не меняя адрес.
+? fill Впишите функцию, которая показывает страницу 404 из серверного компонента.
+```code
+if (!post) ___();
+```
+> notFound
+= notFound из next/navigation рендерит not-found.tsx.
+? mc Когда нужен `cache: "no-store"`?
++ Для персональных или постоянно меняющихся данных, например корзины пользователя
+- Для статичного текста «О компании»
+- Для картинок
+- Никогда
+= no-store делает страницу динамической и данные — всегда свежими.
+? out Что выведет код?
+```code
+const env = { NEXT_PUBLIC_API: "https://api", DB_PASS: "secret" };
+const client = Object.keys(env).filter(k => k.startsWith("NEXT_PUBLIC_"));
+console.log(client.join(","));
+```
+> NEXT_PUBLIC_API
+= В браузер попадают только переменные с префиксом NEXT_PUBLIC_.
+? mc Что делает Server Action?
++ Серверная функция, которую вызывают из формы или кнопки без отдельного API
+- Анимацию на сервере
+- Деплой на Vercel
+- Тест компонента
+= Server Actions упрощают мутации данных.
+? mc Где выводится общий для всех страниц футер?
++ В app/layout.tsx
+- В каждом page.tsx вручную
+- В route.ts
+- В next.config.js
+= Корневой layout оборачивает все страницы.
+? fill Впишите команду, которая запускает сервер разработки.
+```code
+npm run ___
+```
+> dev
+= next dev — сервер с горячей перезагрузкой.

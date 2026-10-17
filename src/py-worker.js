@@ -1,7 +1,24 @@
 /* AVALAND: запуск Python-решений в Pyodide (WebAssembly), отдельный поток */
 import { loadPyodide } from "./pyodide/pyodide.mjs";
+const PKG_BASE = "https://cdn.jsdelivr.net/pyodide/v@PYODIDE_VERSION@/full/";
 const PRELUDE = `
-import json, sys, io, traceback
+import json, sys, io, os, traceback, warnings
+os.environ["MPLBACKEND"] = "Agg"
+warnings.filterwarnings("ignore", message=".*non-interactive.*")
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+
+def _ava_figs():
+    plt = sys.modules.get("matplotlib.pyplot")
+    if plt is None:
+        return []
+    import base64
+    imgs = []
+    for n in plt.get_fignums()[:6]:
+        b = io.BytesIO()
+        plt.figure(n).savefig(b, format="png", dpi=90, bbox_inches="tight")
+        imgs.append(base64.b64encode(b.getvalue()).decode())
+    plt.close("all")
+    return imgs
 
 class _AvaEnc(json.JSONEncoder):
     def default(self, o):
@@ -73,7 +90,11 @@ def __ava_play(code, stdin):
         err = "".join(keep).rstrip()
     finally:
         sys.stdout, sys.stderr, sys.stdin = old
-    return json.dumps({"out": out.getvalue(), "err": err})
+    try:
+        imgs = _ava_figs()
+    except BaseException:
+        imgs = []
+    return json.dumps({"out": out.getvalue(), "err": err, "imgs": imgs})
 `;
 let py = null, ready = null;
 async function boot() {
@@ -85,15 +106,23 @@ async function boot() {
     const bin = Uint8Array.from(atob(b64.trim()), c => c.charCodeAt(0));
     stdLibURL = URL.createObjectURL(new Blob([bin], { type: "application/zip" }));
   }
-  py = await loadPyodide({ indexURL: base, stdLibURL, stdout: () => {}, stderr: () => {} });
+  const opts = { indexURL: base, stdLibURL, stdout: () => {}, stderr: () => {} };
+  if (!PKG_BASE.includes("@PYODIDE")) opts.packageBaseUrl = PKG_BASE;   // wheels numpy/pandas/… с CDN Pyodide
+  py = await loadPyodide(opts);
   py.runPython(PRELUDE);
 }
 self.onmessage = async e => {
-  const { id, code, fn, tests, warm, play, stdin } = e.data;
+  const { id, code, fn, tests, warm, play, stdin, pkgs } = e.data;
   try {
     if (!ready) ready = boot();
     await ready;
     if (warm) { self.postMessage({ id, ready: true }); return; }
+    if (pkgs != null) {
+      const names = [];
+      try { await py.loadPackagesFromImports(pkgs, { messageCallback: m => { const k = /Loaded (.+)/.exec(m); if (k) names.push(k[1]); }, errorCallback: () => {} }); }
+      catch (err) { self.postMessage({ id, pkgErr: String(err && err.message || err) }); return; }
+      self.postMessage({ id, loaded: names.join(", ") }); return;
+    }
     if (play != null) { self.postMessage({ id, ...JSON.parse(py.globals.get("__ava_play")(play, stdin || "")) }); return; }
     const out = py.globals.get("__ava_run")(code, fn, JSON.stringify(tests));
     self.postMessage({ id, ...JSON.parse(out) });

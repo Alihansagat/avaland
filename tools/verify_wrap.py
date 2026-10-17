@@ -9,7 +9,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
-from verify_outputs import run  # noqa: E402
+from verify_outputs import run, SWIFT  # noqa: E402
+UNCHECKED = ("dart", "sql") if SWIFT.exists() else ("dart", "swift", "sql")
 
 TMP = Path(tempfile.mkdtemp(prefix="ava-wrap-"))
 NODE = r"""
@@ -19,7 +20,7 @@ const cut = src.slice(0, src.indexOf("/* --- JavaScript / TypeScript"));
 const ctx = {}; vm.createContext(ctx); vm.runInContext(cut + ";this.wrapProgram = wrapProgram; this.PLAY_START = PLAY_START; this.PLAY_STDIN = PLAY_STDIN;", ctx);
 global.window = {}; require(process.argv[2]);
 const out = [];
-for (const L of window.AVA_CONTENT) L.lessons.forEach((l, i) => out.push({ lang: L.id, key: L.id + ":" + i, where: "урок " + (i + 1) + " «" + l.t + "»", code: ctx.wrapProgram(L.id, l.code), stdin: "Аня\n20\n5\n3\n" }));
+for (const L of window.AVA_CONTENT) L.lessons.forEach((l, i) => out.push({ lang: L.cave || L.id, key: L.id + ":" + i, where: L.id + " · урок " + (i + 1) + " «" + l.t + "»", code: ctx.wrapProgram(L.cave || L.id, l.code), stdin: "Аня\n20\n5\n3\n" }));
 for (const [lang, code] of Object.entries(ctx.PLAY_START)) if (lang !== "base") out.push({ lang, where: "стартовый пример компилятора", code, stdin: ctx.PLAY_STDIN[lang] || "" });
 console.log(JSON.stringify(out));
 """
@@ -66,7 +67,12 @@ def prog(lang, code, d):
         rc, o, e = run(["kotlinc", "a.kt", "-nowarn", "-include-runtime", "-d", "a.jar"], cwd=d, timeout=240)
         if rc: raise RuntimeError(e)
         return ["java", "-jar", "a.jar"]
-    return None  # dart, swift: checked on Compiler Explorer
+    if lang == "swift" and SWIFT.exists():
+        (d / "main.swift").write_text(code)
+        rc, o, e = run([str(SWIFT / "usr/libexec/swift/bin/swiftc"), "-resource-dir", str(SWIFT / "usr/lib/swift"), "main.swift", "-o", "a"], cwd=d, timeout=240)
+        if rc: raise RuntimeError(e)
+        return ["./a"]
+    return None  # dart: checked on Compiler Explorer
 
 
 def main():
@@ -100,8 +106,9 @@ def main():
     if "--write" in sys.argv:
         path = ROOT / "content" / "norun.list"
         old = [l for l in path.read_text().splitlines() if l and not l.startswith("#")] if path.exists() else []
-        langs_checked = {x["lang"] for x in items if (not only or x["lang"] in only) and x["lang"] not in ("dart", "swift", "sql")}
-        keep = [k for k in old if k.split(":")[0] not in langs_checked]
+        langs_checked = {x["lang"] for x in items if (not only or x["lang"] in only) and x["lang"] not in UNCHECKED}
+        id2lang = {x["key"].split(":")[0]: x["lang"] for x in items if x.get("key")}
+        keep = [k for k in old if id2lang.get(k.split(":")[0], k.split(":")[0]) not in langs_checked]
         path.write_text("# Уроки, пример из которых нельзя запустить отдельно (фреймворк, несколько файлов, заглушки).\n# Файл обновляет tools/verify_wrap.py --write; Dart и Swift проверяются на godbolt.org.\n" + "\n".join(sorted(set(keep + keys))) + "\n")
         print("записан", path)
     print(f"\nработает: {ok}, проблем: {bad}, пропущено (dart/swift/sql): {skipped}\nprograms: {TMP / 'programs.json'}")

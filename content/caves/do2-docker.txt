@@ -1,0 +1,272 @@
+@lang id=docker name=Docker land=Пещера Docker color=#2496ed cave=base track=devops step=2
+@about Контейнеры: образы, Dockerfile, тома и сети, Docker Compose для приложения с базой и безопасные образы.
+@why Вторая, потому что контейнер упаковывает приложение со всем окружением и одинаково запускается у разработчика, в CI и на сервере. Без Docker не построить пайплайн из последней пещеры.
+
+@lesson Образы и контейнеры
+Образ — неизменяемый шаблон (система + зависимости + код), контейнер — запущенный экземпляр образа. Образы берут из реестров: Docker Hub, GitHub Container Registry.
+Команды: `docker run -d -p 8080:80 --name web nginx:1.27` (запустить в фоне, порт 8080 хоста → 80 контейнера), `docker ps`, `docker logs -f web`, `docker exec -it web sh` (зайти внутрь), `docker stop web`, `docker rm web`.
+Контейнер одноразовый: всё, что записано внутри, пропадёт при удалении. Данные хранят в томах, настройки передают переменными окружения `-e`.
+```code
+# запустить PostgreSQL для разработки
+docker run -d --name db \
+  -e POSTGRES_PASSWORD=devpass \
+  -p 5432:5432 \
+  -v pgdata:/var/lib/postgresql/data \
+  postgres:17
+
+docker ps                          # запущенные контейнеры
+docker logs -f db                  # логи
+docker exec -it db psql -U postgres
+docker stop db && docker rm db     # данные остались в томе pgdata
+docker volume ls
+```
+! Указывайте версию образа, а не `latest`
+! Данные — в томах, контейнер можно удалить в любой момент
+! `-p хост:контейнер` — порядок портов
+? mc Чем образ отличается от контейнера?
++ Образ — шаблон, контейнер — запущенный экземпляр этого шаблона
+- Ничем
+- Контейнер хранится в Docker Hub
+- Образ работает в фоне
+= Из одного образа можно запустить много контейнеров.
+? mc Что значит `-p 8080:80`?
++ Порт 8080 компьютера пробрасывается на порт 80 контейнера
+- Контейнер использует 8080 процессоров
+- Порт 80 компьютера на 8080 контейнера
+- Ограничение памяти
+= Сначала хост, затем контейнер.
+? fill Впишите команду, показывающую логи контейнера.
+```code
+docker ___ -f web
+```
+> logs
+= -f — следить за новыми строками.
+? out Что выведет команда?
+```code
+echo "8080:80" | cut -d: -f2
+```
+> 80
+= Порт внутри контейнера — второе поле.
+
+@lesson Dockerfile
+Dockerfile описывает сборку образа по шагам: `FROM` (базовый образ), `WORKDIR`, `COPY`, `RUN` (команды при сборке), `ENV`, `EXPOSE`, `CMD` (команда запуска). Сборка — `docker build -t avaland-api:1.0 .`.
+Каждый шаг — слой с кэшем. Сначала копируют файлы зависимостей и устанавливают их, потом код: тогда изменение кода не переустанавливает зависимости.
+Многоэтапная сборка (`FROM ... AS build`) собирает в одном образе, а в итоговый копирует только результат — образ меньше и без компиляторов. `.dockerignore` исключает `node_modules`, `.git`, `.env`.
+```code
+# Dockerfile для Node.js API
+FROM node:22-alpine AS deps
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
+
+FROM node:22-alpine AS build
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci
+COPY . .
+RUN npm run build
+
+FROM node:22-alpine
+WORKDIR /app
+ENV NODE_ENV=production
+COPY --from=deps /app/node_modules ./node_modules
+COPY --from=build /app/dist ./dist
+USER node
+EXPOSE 3000
+HEALTHCHECK CMD wget -qO- http://localhost:3000/health || exit 1
+CMD ["node", "dist/server.js"]
+
+# .dockerignore
+# node_modules
+# .git
+# .env
+```
+! Зависимости копируют и ставят до кода — кэш слоёв
+! Многоэтапная сборка — маленький итоговый образ
+! `USER` без root, секреты — не в образе
+? mc Зачем копировать package.json и ставить зависимости до копирования кода?
++ Чтобы при изменении кода Docker взял слой с зависимостями из кэша
+- Так быстрее работает Node.js
+- Без этого не соберётся
+- Чтобы образ был больше
+= Порядок шагов определяет эффективность кэша.
+? mc Чем RUN отличается от CMD?
++ RUN выполняется при сборке образа, CMD — при запуске контейнера
+- Ничем
+- CMD выполняется при сборке
+- RUN только для Windows
+= RUN устанавливает, CMD запускает.
+? fill Впишите инструкцию, задающую базовый образ.
+```code
+___ python:3.13-slim
+```
+> FROM
+> from
+= Каждый Dockerfile начинается с FROM.
+? out Что выведет команда?
+```code
+printf "FROM a AS deps\nRUN x\nFROM b AS build\nFROM c\n" | grep -c "^FROM"
+```
+> 3
+= Три этапа сборки.
+
+@lesson Docker Compose
+Compose описывает несколько контейнеров приложения в `compose.yaml`: API, база, Redis, воркер. Запуск всего — `docker compose up -d`, остановка — `docker compose down`, логи — `docker compose logs -f api`.
+Сервисы в одном Compose-проекте видят друг друга по имени: API подключается к `postgres://app:pass@db:5432/app`, а не к localhost. Порт базы наружу можно не публиковать.
+`depends_on` с `condition: service_healthy` ждёт готовности базы, тома хранят данные, переменные берутся из `.env`.
+```code
+# compose.yaml
+services:
+  api:
+    build: .
+    ports: ["3000:3000"]
+    environment:
+      DATABASE_URL: postgres://app:${DB_PASSWORD}@db:5432/app
+      REDIS_URL: redis://cache:6379
+    depends_on:
+      db:
+        condition: service_healthy
+      cache:
+        condition: service_started
+    restart: unless-stopped
+
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app"]
+      interval: 5s
+
+  cache:
+    image: redis:7-alpine
+
+volumes:
+  pgdata:
+```
+! Сервисы обращаются друг к другу по имени сервиса
+! Порты базы наружу не публикуют
+! `service_healthy` — ждать, пока база действительно готова
+? mc По какому адресу API в Compose подключится к базе из сервиса db?
++ db:5432
+- localhost:5432
+- 127.0.0.1:5432
+- docker:5432
+= localhost внутри контейнера — это сам контейнер API.
+? out Что выведет команда?
+```code
+printf "services:\n  api:\n  db:\n  cache:\nvolumes:\n  pgdata:\n" | sed -n '/^services:/,/^volumes:/p' | grep -c "^  [a-z]*:$"
+```
+> 3
+= В разделе services три сервиса.
+? fill Впишите команду запуска всех сервисов в фоне.
+```code
+docker compose ___ -d
+```
+> up
+= down останавливает и удаляет контейнеры.
+? mc Зачем healthcheck у базы и condition: service_healthy?
++ API запустится только после того, как база готова принимать подключения
+- Ускоряет базу
+- Делает бэкапы
+- Без него Compose не работает
+= Иначе API упадёт при старте, пока база инициализируется.
+
+@lesson Безопасные и лёгкие образы
+Размер и безопасность образа зависят от базы: `alpine` и `slim` меньше, distroless — без оболочки вовсе. Меньше пакетов — меньше уязвимостей и быстрее загрузка.
+Сканеры (`docker scout cves`, Trivy) ищут уязвимости в образе; их запускают в CI. Образы помечают версией и хешем коммита: `ghcr.io/team/api:1.4.2` и `:sha-3f9c1a2`.
+Секреты не кладут в Dockerfile и слои образа: их передают при запуске переменными окружения или через секреты оркестратора. Ограничения ресурсов — `--memory 512m --cpus 1`.
+```code
+# сборка и публикация в GitHub Container Registry
+docker build -t ghcr.io/alihansagat/avaland-api:1.4.2 -t ghcr.io/alihansagat/avaland-api:sha-3f9c1a2 .
+docker push ghcr.io/alihansagat/avaland-api:1.4.2
+
+# проверка уязвимостей
+trivy image --severity HIGH,CRITICAL ghcr.io/alihansagat/avaland-api:1.4.2
+
+# размер образов
+docker images --format "{{.Repository}}:{{.Tag}} {{.Size}}"
+
+# запуск с ограничениями и без лишних прав
+docker run -d --memory 512m --cpus 1 --read-only --cap-drop ALL \
+  -e DATABASE_URL="$DATABASE_URL" ghcr.io/alihansagat/avaland-api:1.4.2
+```
+! Секреты — при запуске, не в образе
+! Тег версии + тег коммита для отката
+! Сканирование образов — часть CI
+? mc Почему нельзя писать `ENV API_KEY=секрет` в Dockerfile?
++ Секрет останется в слоях образа и будет виден всем, у кого есть образ
+- Docker не поддерживает ENV
+- Ключ будет удалён
+- Это замедлит сборку
+= Секреты передают при запуске.
+? out Что выведет команда?
+```code
+echo "ghcr.io/alihansagat/avaland-api:1.4.2" | awk -F: '{print $NF}'
+```
+> 1.4.2
+= Последнее поле после двоеточия — тег.
+? fill Впишите команду загрузки образа в реестр.
+```code
+docker ___ ghcr.io/team/api:1.0
+```
+> push
+= pull — скачать.
+? mc Какой базовый образ даст меньший размер для Python?
++ python:3.13-slim
+- ubuntu с ручной установкой Python и компиляторов
+- python:3.13 полный
+- windows
+= slim без лишних пакетов.
+
+@exam
+? mc Что произойдёт с данными базы в контейнере без тома после docker rm?
++ Пропадут вместе с контейнером
+- Останутся в образе
+- Сохранятся в Docker Hub
+- Перенесутся в новый контейнер
+= Данные хранят в томах.
+? fill Впишите команду, чтобы зайти в оболочку запущенного контейнера.
+```code
+docker ___ -it web sh
+```
+> exec
+= exec выполняет команду в работающем контейнере.
+? out Что выведет команда?
+```code
+echo "node:22-alpine" | tr ':' ' ' | wc -w
+```
+> 2
+= Имя образа и тег.
+? mc Зачем многоэтапная сборка?
++ Собрать приложение в одном этапе и скопировать в итоговый образ только результат
+- Чтобы образ собирался дольше
+- Чтобы запускать несколько приложений
+- Для Windows
+= В итоговом образе нет компиляторов и исходников.
+? mc Что лучше указать в FROM для продакшена?
++ Конкретную версию, например node:22-alpine
+- node:latest
+- Ничего
+- Самый большой образ
+= latest меняется без предупреждения.
+? out Что выведет команда?
+```code
+printf "node_modules\n.git\n.env\n" | grep -c "env"
+```
+> 1
+= Только .env содержит env в имени.
+? fill Впишите имя файла, исключающего файлы из контекста сборки.
+```code
+.___
+```
+> dockerignore
+= Как .gitignore для docker build.
+? mc Как сервис api в Compose найдёт Redis из сервиса cache?
++ По имени хоста cache
+- По localhost
+- По внешнему IP
+- Никак
+= Compose создаёт общую сеть с DNS по именам сервисов.

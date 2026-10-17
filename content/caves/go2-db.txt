@@ -1,0 +1,414 @@
+@lang id=godb name=Базы данных в Go land=Пещера баз данных Go color=#336791 cave=go track=goback step=2
+@about PostgreSQL из Go: database/sql и pgx, запросы, транзакции, миграции, sqlc и тестирование.
+@why Вторая, потому что HTTP-сервис из первой пещеры должен хранить данные. В Go предпочитают явный SQL без тяжёлых ORM — здесь научитесь писать его безопасно и быстро.
+
+@lesson database/sql и пул соединений
+Пакет `database/sql` — общий интерфейс к базам, драйвер подключают отдельно (для PostgreSQL — pgx). `sql.Open` не подключается сразу, а создаёт пул соединений; проверка — `db.PingContext(ctx)`.
+Пул настраивают: `SetMaxOpenConns`, `SetMaxIdleConns`, `SetConnMaxLifetime`. Объект `*sql.DB` создают один раз на приложение и передают в обработчики.
+Запросы: `QueryRowContext` — одна строка, `QueryContext` — много (обязательно `defer rows.Close()` и проверка `rows.Err()`), `ExecContext` — изменения без результата.
+```code
+package main
+
+import (
+	"context"
+	"database/sql"
+	"log"
+	"time"
+
+	_ "github.com/jackc/pgx/v5/stdlib"
+)
+
+type Book struct {
+	ID    int64
+	Title string
+	Year  int
+}
+
+func main() {
+	db, err := sql.Open("pgx", "postgres://shop:shop@localhost:5432/shop")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(20)
+	db.SetConnMaxLifetime(30 * time.Minute)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	rows, err := db.QueryContext(ctx, "SELECT id, title, year FROM books WHERE year >= $1 ORDER BY year", 2010)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer rows.Close()
+	var books []Book
+	for rows.Next() {
+		var b Book
+		if err := rows.Scan(&b.ID, &b.Title, &b.Year); err != nil {
+			log.Fatal(err)
+		}
+		books = append(books, b)
+	}
+	if err := rows.Err(); err != nil {
+		log.Fatal(err)
+	}
+	log.Println(len(books))
+}
+```
+! `*sql.DB` — пул соединений, один на приложение
+! После `QueryContext` — `defer rows.Close()` и проверка `rows.Err()`
+! Параметры только через `$1`, `$2` — никакой склейки строк
+? mc Что создаёт `sql.Open`?
++ Пул соединений, который подключается к базе по мере необходимости
+- Одно открытое соединение
+- Новую базу данных
+- Таблицу
+= Проверить доступность базы можно через Ping.
+? mc Почему нельзя писать `"... WHERE name = '" + name + "'"`?
++ Это SQL-инъекция: злоумышленник подставит свой SQL
+- Медленно
+- Не компилируется
+- Go не поддерживает кавычки
+= Параметры $1 экранируются драйвером.
+? fill Впишите метод, который вызывают для освобождения результата запроса.
+```code
+defer rows.___()
+```
+> Close
+= Иначе соединение не вернётся в пул.
+? out Что выведет код?
+```code
+package main
+
+import "fmt"
+
+func main() {
+	name := "x' OR '1'='1"
+	unsafe := "SELECT * FROM users WHERE name = '" + name + "'"
+	fmt.Println(len(unsafe) > 40, unsafe[len(unsafe)-7:])
+}
+```
+> true '1'='1'
+= Склейка превратила ввод в условие, которое всегда истинно, — классическая инъекция.
+
+@lesson pgx, ошибки и NULL
+Драйвер pgx можно использовать напрямую через `pgxpool` — он быстрее и знает типы PostgreSQL (массивы, JSONB, UUID). `pgx.CollectRows` собирает строки в срез структур.
+Отсутствие строки — особая ошибка: `errors.Is(err, pgx.ErrNoRows)` (или `sql.ErrNoRows`) превращают в 404, а не в 500. Ошибку уникальности узнают по коду PostgreSQL `23505` и отдают 409.
+`NULL` в столбце не влезет в обычный `string`: используют указатели `*string` или типы `sql.NullString`/`pgtype.Text`.
+```code
+package store
+
+import (
+	"context"
+	"errors"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+var ErrNotFound = errors.New("not found")
+var ErrDuplicate = errors.New("duplicate")
+
+type User struct {
+	ID    int64   `db:"id"`
+	Email string  `db:"email"`
+	Bio   *string `db:"bio"`        // может быть NULL
+}
+
+type Store struct{ pool *pgxpool.Pool }
+
+func (s *Store) UserByID(ctx context.Context, id int64) (User, error) {
+	rows, _ := s.pool.Query(ctx, "SELECT id, email, bio FROM users WHERE id = $1", id)
+	u, err := pgx.CollectOneRow(rows, pgx.RowToStructByName[User])
+	if errors.Is(err, pgx.ErrNoRows) {
+		return User{}, ErrNotFound
+	}
+	return u, err
+}
+
+func (s *Store) CreateUser(ctx context.Context, email string) (int64, error) {
+	var id int64
+	err := s.pool.QueryRow(ctx, "INSERT INTO users (email) VALUES ($1) RETURNING id", email).Scan(&id)
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		return 0, ErrDuplicate
+	}
+	return id, err
+}
+```
+! «Нет строки» — не ошибка сервера, а 404
+! Код `23505` — нарушение уникальности, отдавайте 409
+! NULL-столбцы — в указатели или Null-типы
+? mc Как отличить «пользователь не найден» от настоящей ошибки базы?
++ Проверить errors.Is(err, pgx.ErrNoRows) или sql.ErrNoRows
+- Сравнить строку ошибки с "not found"
+- Никак
+- Проверить err == nil
+= Сентинельные ошибки сравнивают через errors.Is.
+? out Что выведет код?
+```code
+package main
+
+import (
+	"errors"
+	"fmt"
+)
+
+var ErrNotFound = errors.New("not found")
+
+func find(id int) error {
+	if id != 1 {
+		return fmt.Errorf("user %d: %w", id, ErrNotFound)
+	}
+	return nil
+}
+
+func main() {
+	err := find(7)
+	fmt.Println(errors.Is(err, ErrNotFound), err)
+}
+```
+> true user 7: not found
+= %w оборачивает ошибку, errors.Is находит её внутри цепочки.
+? fill Впишите тип поля для столбца, который может быть NULL.
+```code
+Bio ___string `db:"bio"`
+```
+> *
+= Указатель *string равен nil, когда в базе NULL.
+? mc Какой HTTP-код вернуть при ошибке PostgreSQL 23505 на регистрации?
++ 409 Conflict
+- 500
+- 404
+- 200
+= Почта уже занята.
+
+@lesson Транзакции и миграции
+Транзакция: `tx, err := pool.Begin(ctx)`, затем запросы через `tx`, в конце `tx.Commit(ctx)`. Сразу после Begin пишут `defer tx.Rollback(ctx)` — после успешного Commit откат ничего не сделает, а при ошибке или панике отменит изменения.
+Для операций со складом и деньгами блокируют строки `SELECT ... FOR UPDATE` или используют атомарный `UPDATE ... SET stock = stock - $1 WHERE id = $2 AND stock >= $1` и проверяют число изменённых строк.
+Схему меняют миграциями (golang-migrate, goose): пары файлов `0001_init.up.sql` / `.down.sql` применяются по порядку и хранятся в git.
+```code
+func (s *Store) Reserve(ctx context.Context, productID int64, qty int) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)            // безопасно и после Commit
+
+	tag, err := tx.Exec(ctx,
+		"UPDATE products SET stock = stock - $1 WHERE id = $2 AND stock >= $1", qty, productID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrOutOfStock           // откат через defer
+	}
+	if _, err := tx.Exec(ctx,
+		"INSERT INTO reservations (product_id, qty) VALUES ($1, $2)", productID, qty); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// migrations/0001_init.up.sql
+// CREATE TABLE products (id bigserial PRIMARY KEY, name text NOT NULL, stock int NOT NULL CHECK (stock >= 0));
+// migrate -path migrations -database "$DATABASE_URL" up
+```
+! `defer tx.Rollback(ctx)` сразу после `Begin`
+! Атомарный UPDATE с условием защищает от продажи товара, которого нет
+! Миграции up и down — в репозитории
+? mc Зачем `defer tx.Rollback(ctx)` сразу после Begin?
++ Чтобы транзакция откатилась при любой ошибке или панике; после Commit откат ничего не делает
+- Чтобы всегда отменять изменения
+- Это ускоряет Commit
+- Это обязательное требование Go
+= Защита от забытого отката на каждом return.
+? out Что выведет код?
+```code
+package main
+
+import "fmt"
+
+func main() {
+	stock := 3
+	reserve := func(q int) bool {
+		if stock < q {
+			return false
+		}
+		stock -= q
+		return true
+	}
+	fmt.Println(reserve(2), reserve(2), stock)
+}
+```
+> true false 1
+= Второй резерв не проходит: осталась одна единица.
+? fill Впишите метод транзакции, который фиксирует изменения.
+```code
+return tx.___(ctx)
+```
+> Commit
+= Commit сохраняет все изменения транзакции.
+? mc Почему UPDATE ... WHERE stock >= $1 безопаснее проверки остатка в Go и отдельного UPDATE?
++ Проверка и изменение выполняются атомарно в базе, и два параллельных запроса не продадут один товар дважды
+- Он короче
+- Go не умеет сравнивать числа
+- Это не безопаснее
+= Иначе возникает гонка между SELECT и UPDATE.
+
+@lesson sqlc и тесты с базой
+sqlc генерирует типобезопасный Go-код из SQL-файлов: пишете запрос с комментарием `-- name: GetBook :one`, запускаете `sqlc generate` — получаете функцию `q.GetBook(ctx, id)` с правильными типами. SQL остаётся SQL, а ошибки в нём ловятся при генерации.
+Хранилище прячут за интерфейсом (`type BookStore interface { ... }`): обработчики HTTP тестируют с фальшивой реализацией в памяти, а сам SQL — интеграционными тестами на настоящем PostgreSQL через testcontainers-go.
+Табличные тесты (`[]struct{ name string; in; want }` и `t.Run`) — идиоматичный стиль Go.
+```code
+package store
+
+import "testing"
+
+func Slugify(s string) string {
+	out := []rune{}
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			out = append(out, r)
+		case r >= 'A' && r <= 'Z':
+			out = append(out, r+32)
+		case r == ' ' || r == '-':
+			if len(out) > 0 && out[len(out)-1] != '-' {
+				out = append(out, '-')
+			}
+		}
+	}
+	return string(out)
+}
+
+func TestSlugify(t *testing.T) {
+	tests := []struct {
+		name, in, want string
+	}{
+		{"простой", "Hello World", "hello-world"},
+		{"двойные пробелы", "Go  is fun", "go-is-fun"},
+		{"цифры", "Top 10 Books", "top-10-books"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := Slugify(tt.in); got != tt.want {
+				t.Errorf("Slugify(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+// queries.sql для sqlc:
+// -- name: GetBook :one
+// SELECT id, title, year FROM books WHERE id = $1;
+```
+! Табличные тесты с `t.Run` — стандарт Go
+! Обработчики тестируйте с фальшивым хранилищем, SQL — на настоящем PostgreSQL
+! sqlc ловит ошибки в SQL ещё до запуска
+? mc Что делает sqlc?
++ Генерирует типобезопасный Go-код из SQL-запросов
+- Создаёт базу данных
+- Заменяет PostgreSQL
+- Пишет тесты
+= SQL пишете вы, обвязку — генератор.
+? out Что выведет код?
+```code
+package main
+
+import (
+	"fmt"
+	"strings"
+)
+
+func main() {
+	words := strings.Fields("  Go   is  fun ")
+	fmt.Println(len(words), strings.ToLower(strings.Join(words, "-")))
+}
+```
+> 3 go-is-fun
+= Fields делит по любым пробелам и убирает пустые части.
+? fill Впишите метод testing.T, запускающий подтест.
+```code
+t.___(tt.name, func(t *testing.T) { ... })
+```
+> Run
+= t.Run даёт имя каждому случаю табличного теста.
+? mc Как протестировать HTTP-обработчик без базы данных?
++ Передать ему фальшивую реализацию интерфейса хранилища
+- Удалить базу
+- Нельзя
+- Запустить тест в проде
+= Интерфейс отделяет обработчик от конкретной базы.
+
+@exam
+? mc Сколько объектов *sql.DB нужно приложению?
++ Один, он сам управляет пулом соединений
+- Один на запрос
+- Один на горутину
+- Один на таблицу
+= Создавать пул на каждый запрос — дорого и опасно.
+? out Что выведет код?
+```code
+package main
+
+import (
+	"errors"
+	"fmt"
+)
+
+func main() {
+	base := errors.New("no rows")
+	err := fmt.Errorf("get book: %w", base)
+	fmt.Println(errors.Is(err, base), errors.Unwrap(err) == base)
+}
+```
+> true true
+= Обёрнутая ошибка находится и разворачивается.
+? fill Впишите плейсхолдер первого параметра в запросе PostgreSQL.
+```code
+"SELECT * FROM books WHERE id = ___"
+```
+> $1
+= PostgreSQL использует $1, $2...
+? mc Что вернуть клиенту, если книга по id не найдена?
++ 404
+- 500
+- 200 с пустым телом
+- 409
+= Отсутствие записи — не ошибка сервера.
+? mc Где хранить миграции базы?
++ В репозитории рядом с кодом, применять инструментом миграций
+- Только в голове администратора
+- В переменных окружения
+- В логах
+= Миграции — версия схемы.
+? out Что выведет код?
+```code
+package main
+
+import "fmt"
+
+func main() {
+	var bio *string
+	fmt.Println(bio == nil)
+	s := "Go-разработчик"
+	bio = &s
+	fmt.Println(*bio)
+}
+```
+> true Go-разработчик
+= nil означает NULL, после присваивания указатель ссылается на строку.
+? mc Что сделать после rows.Next() цикла?
++ Проверить rows.Err()
+- Ничего
+- Вызвать Commit
+- Закрыть базу
+= Ошибка могла произойти во время итерации.
+? fill Впишите библиотеку Go для контейнеров с базой в интеграционных тестах.
+```code
+import "github.com/testcontainers/___"
+```
+> testcontainers-go
+= testcontainers-go запускает PostgreSQL в Docker для тестов.

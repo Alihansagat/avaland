@@ -90,6 +90,50 @@ with sync_playwright() as p:
     check("редактор в задаче", True)
     pg.screenshot(path=str(OUT / "problem.png"))
 
+
+    # caves: map markers, roadmap, cave panel, finishing a path gives the track certificate
+    pg.evaluate("document.querySelector('[data-tab=map]').click()")
+    pg.wait_for_selector("#map .cavemk")
+    n = pg.evaluate("document.querySelectorAll('#map .cavemk').length")
+    check("входы в пещеры на карте", n >= 15, str(n))
+    pg.evaluate("document.querySelector('#map .cavemk[data-t=ml]').dispatchEvent(new MouseEvent('click', {bubbles: true}))")
+    pg.wait_for_selector(".roadmap")
+    steps = pg.evaluate("document.querySelectorAll('.roadmap .rm').length")
+    check("дорожная карта ML", steps == 8 and "Junior ML Engineer" in pg.inner_text("#dlg"), str(steps))
+    pg.screenshot(path=str(OUT / "roadmap.png"), full_page=True)
+    pg.keyboard.press("Escape")
+    pg.evaluate("window.__ava.openCountry(window.AVA_CONTENT.findIndex(L => L.id === 'pd'))")
+    pg.wait_for_selector(".box.why")
+    check("панель пещеры", "Почему эта пещера" in pg.inner_text("#dlg"))
+    pg.screenshot(path=str(OUT / "cave.png"), full_page=True)
+    pg.keyboard.press("Escape")
+    pg.evaluate("""() => { const A = window.__ava, C = window.AVA_CONTENT, ix = id => C.findIndex(L => L.id === id), t = Date.now();
+      A.S.profile.name = 'Ада Лавлейс'; A.S.exams.py = { passed: true, date: t, score: 12, total: 12, cid: 'X' };
+      ['np', 'pd', 'mpl', 'skl'].forEach(id => { A.S.exams[id] = { passed: true, date: t, score: 8, total: 8, cid: 'C' }; });
+      const L = ix('torch'); C[L].lessons.forEach((_, i) => { A.S.topics['torch-' + i] = { last: t }; });
+      A.startQuiz({ mode: 'exam', l: L, qs: [{ q: { t: 'mc', q: 'Тест?', o: ['да', 'нет'], a: 0, e: '' }, l: L, i: 0 }] }); }""")
+    pg.evaluate("[...document.querySelectorAll('.opt')].find(b => b.textContent === 'да').click()")
+    pg.click("#nx")
+    pg.wait_for_selector("[data-act=trackCert]")
+    check("путь пройден → сертификат", "Junior ML Engineer" in pg.inner_text("#dlg") and pg.evaluate("!!window.__ava.S.tracks.ml"), pg.inner_text("#dlg")[:160])
+    pg.click("[data-act=trackCert]")
+    pg.wait_for_selector("img.imgout")
+    pg.screenshot(path=str(OUT / "track-cert.png"))
+    cert = pg.evaluate("document.querySelector('img.imgout').src")
+    (OUT / "track-cert-full.png").write_bytes(__import__("base64").b64decode(cert.split(",")[1]))
+    pg.keyboard.press("Escape")
+    pg.evaluate("document.querySelector('[data-tab=awards]').click()")
+    check("пути на экране наград", "Пути профессий" in pg.inner_text("#view"))
+
+    # caves are locked without dev mode
+    pg2 = ctx.new_page(); pg2.on("pageerror", lambda e: errs.append(str(e)))
+    pg2.goto("http://127.0.0.1:8765/avaland.html", wait_until="load")
+    pg2.wait_for_selector("#map .cavemk")
+    locked = pg2.evaluate("document.querySelectorAll('#map .cavemk.locked').length")
+    check("пещеры закрыты до экзамена страны", locked >= 14, str(locked))
+    pg2.screenshot(path=str(OUT / "map-caves.png"))
+    pg2.close()
+
     check("ошибок JS на странице нет", not errs, "; ".join(errs)[:300])
     b.close()
 srv.shutdown()

@@ -1,0 +1,307 @@
+@lang id=hotwire name=Hotwire и RSpec land=Пещера Hotwire color=#e9573f cave=rb track=rails step=3
+@about Современный Rails: интерактивность через Turbo и Stimulus, фоновые задачи, тесты RSpec и деплой с Kamal.
+@why Последняя, потому что превращает модели и контроллеры в живое приложение без отдельного фронтенда и учит проверять и выпускать его — так работают Rails-команды.
+
+@lesson Turbo
+Turbo делает Rails-приложение быстрым без SPA. Turbo Drive перехватывает ссылки и формы и подменяет страницу без полной перезагрузки. Turbo Frames (`<turbo-frame id="...">`) обновляют только часть страницы — например, форму редактирования внутри списка.
+Turbo Streams добавляют, заменяют и удаляют элементы: контроллер отвечает `format.turbo_stream`, шаблон `create.turbo_stream.erb` содержит `turbo_stream.prepend "comments", @comment`.
+Через Action Cable стримы приходят всем открытым вкладкам: `broadcasts_to ->(c) { [c.course, :comments] }` в модели и `turbo_stream_from @course, :comments` в шаблоне — комментарии появляются в реальном времени.
+```code
+# app/models/comment.rb
+class Comment < ApplicationRecord
+  belongs_to :course
+  belongs_to :user
+  broadcasts_to ->(comment) { [comment.course, :comments] }, inserts_by: :prepend
+end
+
+# app/controllers/comments_controller.rb
+class CommentsController < ApplicationController
+  def create
+    @comment = @course.comments.build(comment_params.merge(user: current_user))
+    respond_to do |format|
+      if @comment.save
+        format.turbo_stream                              # create.turbo_stream.erb
+        format.html { redirect_to @course }
+      else
+        format.html { render "courses/show", status: :unprocessable_entity }
+      end
+    end
+  end
+end
+
+<%# app/views/comments/create.turbo_stream.erb %>
+<%= turbo_stream.replace "new_comment", partial: "comments/form", locals: { comment: Comment.new } %>
+
+<%# app/views/courses/show.html.erb %>
+<%= turbo_stream_from @course, :comments %>
+<div id="comments"><%= render @course.comments %></div>
+<%= turbo_frame_tag "new_comment" do %><%= render "comments/form", comment: Comment.new %><% end %>
+```
+! Turbo Frame — часть страницы, обновляемая отдельно
+! Turbo Stream — команды append, prepend, replace, remove
+! `broadcasts_to` — обновления в реальном времени без своего JS
+? mc Что делает Turbo Frame?
++ Обновляет только свою часть страницы при переходе или отправке формы внутри неё
+- Перезагружает всю страницу
+- Создаёт iframe с другим сайтом
+- Отправляет письма
+= Ответ сервера подставляется в frame с тем же id.
+? mc Какое действие Turbo Stream добавит элемент в начало списка?
++ prepend
+- append
+- replace
+- remove
+= append — в конец.
+? out Что выведет код?
+```code
+list = %w[b c]
+stream = [[:prepend, "a"], [:append, "d"], [:remove, "c"]]
+stream.each do |action, item|
+  case action
+  when :prepend then list.unshift(item)
+  when :append then list.push(item)
+  when :remove then list.delete(item)
+  end
+end
+puts list.join
+```
+> abd
+= Так браузер применяет команды Turbo Stream к DOM.
+? fill Впишите хелпер, подписывающий страницу на трансляцию.
+```code
+<%= ___ @course, :comments %>
+```
+> turbo_stream_from
+= Подписка через Action Cable.
+
+@lesson Stimulus
+Stimulus — лёгкий JavaScript для поведения, которого нет в HTML: копировать в буфер, показать/скрыть, счётчик символов. Контроллеры лежат в `app/javascript/controllers`.
+Разметка подключает их атрибутами: `data-controller="clipboard"`, `data-action="click->clipboard#copy"`, `data-clipboard-target="source"`. Значения передают `data-clipboard-success-value`.
+Stimulus не рендерит HTML — HTML приходит с сервера, JavaScript только добавляет поведение. Зависимости подключают через importmap без сборщика.
+```code
+// app/javascript/controllers/counter_controller.js
+import { Controller } from "@hotwired/stimulus"
+
+export default class extends Controller {
+  static targets = ["input", "output"]
+  static values = { max: Number }
+
+  connect() { this.update() }
+
+  update() {
+    const left = this.maxValue - this.inputTarget.value.length
+    this.outputTarget.textContent = `Осталось: ${left}`
+    this.outputTarget.classList.toggle("text-red", left < 0)
+  }
+}
+
+<%# в шаблоне %>
+<div data-controller="counter" data-counter-max-value="280">
+  <textarea data-counter-target="input" data-action="input->counter#update"></textarea>
+  <small data-counter-target="output"></small>
+</div>
+```
+! Поведение — в Stimulus, HTML — с сервера
+! `data-action="событие->контроллер#метод"`
+! `connect()` вызывается, когда элемент появился на странице
+? mc Как подключить Stimulus-контроллер к элементу?
++ Атрибутом data-controller="имя"
+- Тегом <script>
+- В routes.rb
+- Через class="controller"
+= Stimulus находит элементы по data-атрибутам.
+? out Что выведет код?
+```code
+max = 280
+text = "a" * 300
+left = max - text.length
+puts "Осталось: #{left} #{left.negative? ? 'red' : 'ok'}"
+```
+> Осталось: -20 red
+= Логика счётчика символов.
+? fill Впишите атрибут, связывающий событие с методом контроллера.
+```code
+<button data-___="click->clipboard#copy">Копировать</button>
+```
+> action
+= Формат событие->контроллер#метод.
+? mc Что вызывает Stimulus, когда элемент с контроллером появляется на странице?
++ connect()
+- initialize()
+- mounted()
+- render()
+= disconnect() — при удалении.
+
+@lesson Фоновые задачи и RSpec
+Active Job выполняет задачи в фоне: `bin/rails g job ImportCourses`, вызов `ImportCoursesJob.perform_later(file_id)`. В Rails 8 по умолчанию Solid Queue — очередь в базе, без Redis; популярна и Sidekiq.
+RSpec — главный инструмент тестов в Rails-командах: `describe`, `it`, `expect(...).to eq(...)`. Модельные спеки проверяют валидации и методы, request-спеки — HTTP-ответы, system-спеки — браузер через Capybara.
+FactoryBot создаёт данные: `create(:course, price: 0)`, `build(:user)`. `have_enqueued_job` проверяет, что задача поставлена в очередь.
+```code
+# spec/models/course_spec.rb
+require "rails_helper"
+
+RSpec.describe Course do
+  it "требует название" do
+    course = build(:course, title: "")
+    expect(course).not_to be_valid
+    expect(course.errors[:title]).to include("can't be blank")
+  end
+
+  it "находит бесплатные курсы" do
+    free = create(:course, price: 0)
+    create(:course, price: 5000)
+    expect(Course.free).to eq([free])
+  end
+end
+
+# spec/requests/enrollments_spec.rb
+RSpec.describe "Enrollments" do
+  it "записывает студента и ставит письмо в очередь" do
+    user, course = create(:user), create(:course)
+    sign_in user
+    expect { post course_enroll_path(course) }
+      .to change(Enrollment, :count).by(1)
+      .and have_enqueued_job(ActionMailer::MailDeliveryJob)
+    expect(response).to redirect_to(course)
+  end
+end
+```
+! Медленное — в `perform_later`
+! Данные для тестов — FactoryBot, а не fixtures на всё
+! `change { ... }.by(1)` проверяет изменение
+? mc Чем perform_later отличается от perform_now?
++ perform_later ставит задачу в очередь, perform_now выполняет сразу
+- Ничем
+- perform_later выполняется ночью
+- perform_now асинхронный
+= Пользователь не ждёт фоновую работу.
+? out Что выведет код?
+```code
+def valid_course?(c) = !c[:title].to_s.strip.empty? && c[:price].to_i >= 0
+puts [{ title: "Ruby", price: 0 }, { title: " ", price: 10 }, { title: "SQL", price: -1 }].count { valid_course?(_1) }
+```
+> 1
+= Только первый курс проходит обе проверки.
+? fill Впишите метод FactoryBot, создающий запись в базе.
+```code
+course = ___(:course, price: 0)
+```
+> create
+= build — без сохранения.
+? mc Какой вид спеков проверяет HTTP-ответы контроллеров?
++ request specs
+- model specs
+- mailer specs
+- helper specs
+= system specs — через браузер.
+
+@lesson Деплой: Kamal и продакшен
+Rails 8 поставляется с Kamal: `kamal setup` собирает Docker-образ и разворачивает его на любом сервере по SSH, `kamal deploy` выкатывает новую версию без простоя. Конфиг — `config/deploy.yml`, секреты — `.kamal/secrets`.
+Перед запуском приложения применяют миграции (`bin/rails db:prepare`), ассеты собираются в образе (`assets:precompile`). Альтернативы — Render, Fly.io, Heroku.
+В продакшене: `RAILS_ENV=production`, логи в stdout, мониторинг ошибок (Sentry, Honeybadger), бэкапы базы, `force_ssl = true`.
+```code
+# config/deploy.yml
+# service: academy
+# image: alihansagat/academy
+# servers:
+#   web: [203.0.113.10]
+#   job:
+#     hosts: [203.0.113.10]
+#     cmd: bin/jobs
+# proxy:
+#   ssl: true
+#   host: academy.kz
+# env:
+#   secret: [RAILS_MASTER_KEY, DATABASE_URL]
+
+# терминал
+# kamal setup        # первый раз: Docker на сервере, прокси, SSL
+# kamal deploy       # каждая новая версия
+# kamal app logs -f  # логи
+
+steps = %w[build push pull migrate switch]
+puts steps.each_with_index.map { |s, i| "#{i + 1}.#{s}" }.join(" ")
+```
+! Секреты — через переменные окружения, не в образе
+! Миграции — до переключения трафика на новую версию
+! Мониторинг ошибок подключают до первых пользователей
+? mc Что делает `kamal deploy`?
++ Собирает и выкатывает новую версию приложения на серверы без простоя
+- Удаляет сервер
+- Запускает тесты локально
+- Создаёт базу данных
+= Kamal переключает трафик на новый контейнер после проверки здоровья.
+? out Что выведет код?
+```code
+env = { "RAILS_ENV" => "production", "RAILS_MASTER_KEY" => nil }
+missing = env.select { |_, v| v.nil? }.keys
+puts missing.empty? ? "ok" : "нет: #{missing.join}"
+```
+> нет: RAILS_MASTER_KEY
+= Без ключа приложение не расшифрует credentials.
+? fill Впишите команду Rails, создающую базу или применяющую миграции.
+```code
+bin/rails db:___
+```
+> prepare
+= db:prepare удобно запускать при старте контейнера.
+? mc Что включить в продакшене, чтобы весь трафик шёл по HTTPS?
++ config.force_ssl = true
+- config.cache_classes = false
+- RAILS_ENV=development
+- Ничего
+= Rails будет перенаправлять HTTP на HTTPS.
+
+@exam
+? mc Зачем Hotwire, если есть React?
++ Позволяет делать интерактивный интерфейс с HTML с сервера без отдельного SPA
+- React не работает с Rails
+- Hotwire быстрее любого JavaScript
+- Hotwire обязателен в Ruby
+= Меньше кода и одна кодовая база.
+? fill Впишите формат ответа контроллера для Turbo Stream.
+```code
+respond_to { |format| format.___ }
+```
+> turbo_stream
+= Rails отрисует *.turbo_stream.erb.
+? out Что выведет код?
+```code
+results = { "models" => [true, true], "requests" => [true, false] }
+total = results.values.flatten
+puts "#{total.count(true)}/#{total.size}"
+```
+> 3/4
+= Итог прогона тестов.
+? mc Что делает data-controller="clipboard"?
++ Подключает Stimulus-контроллер clipboard к элементу
+- Копирует страницу
+- Создаёт маршрут
+- Загружает Turbo
+= Контроллер ищется в app/javascript/controllers.
+? mc Куда вынести импорт тысячи курсов из файла?
++ В Active Job с perform_later
+- В действие контроллера
+- В шаблон
+- В миграцию
+= Пользователь получит ответ сразу.
+? out Что выведет код?
+```code
+before = 3
+after = before + 1
+puts (after - before) == 1 ? "change by 1" : "fail"
+```
+> change by 1
+= Так работает матчер change(...).by(1).
+? fill Впишите матчер RSpec для проверки равенства.
+```code
+expect(Course.count).to ___(2)
+```
+> eq
+= eq сравнивает значения.
+? mc Что нужно Kamal на сервере?
++ Доступ по SSH, Docker он установит сам
+- Установленный Ruby
+- Heroku-аккаунт
+- Kubernetes
+= Kamal работает с обычными серверами.

@@ -218,6 +218,7 @@ async function runRemote(lang, code, stdin) {
 const unesc = s => s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&");
 
 /* --- Python и SQL локально --- */
+const PY_LIBS = new Set(["numpy", "pandas", "matplotlib", "sklearn", "scipy", "torch", "seaborn", "statsmodels", "sympy", "networkx", "PIL", "bs4", "requests", "yaml"]);
 async function runPyPlay(code, stdin) {
   if (!pyReady) {
     playStatus("Загружаю Python… Это нужно один раз за запуск, около 5 секунд.");
@@ -225,11 +226,19 @@ async function runPyPlay(code, stdin) {
     if (r.fatal) return { compile: "Не удалось загрузить Python: " + r.fatal };
     pyReady = true;
   }
+  const libs = [...new Set((code.match(/^\s*(?:import|from)\s+([A-Za-z_]\w*)/gm) || []).map(m => m.trim().split(/\s+/)[1]))].filter(m => PY_LIBS.has(m));
+  if (libs.includes("torch")) return { compile: "PyTorch не работает в браузере: запустите этот код у себя (pip install torch) или в Google Colab. NumPy, pandas, Matplotlib и scikit-learn работают прямо здесь." };
+  if (libs.length) {
+    if (!navigator.onLine) return { compile: "Нет интернета. Библиотеки " + libs.join(", ") + " загружаются из сети один раз — подключитесь и запустите снова." };
+    playStatus(`Загружаю библиотеки: ${libs.join(", ")}… В первый раз это занимает до минуты.`);
+    const p = await pyCall({ pkgs: code }, 180000);
+    if (p.fatal || p.pkgErr) return { compile: "Не удалось загрузить библиотеки: " + (p.fatal || p.pkgErr) };
+  }
   playStatus("Выполняю…");
-  const r = await pyCall({ play: code, stdin }, 10000);
+  const r = await pyCall({ play: code, stdin }, libs.length ? 60000 : 10000);
   if (r.fatal) return { compile: r.fatal };
   if (r.error && !("out" in r)) return { timeout: true };
-  return { out: r.out || "", err: r.err || "", code: r.err ? 1 : 0 };
+  return { out: r.out || "", err: r.err || "", imgs: r.imgs || [], code: r.err ? 1 : 0 };
 }
 async function runSqlPlay(code) {
   let db;
@@ -352,7 +361,8 @@ async function playRun() {
   if (r.streamed) parts.push(stream && stream.innerHTML ? `<pre class="cout">${stream.innerHTML}</pre>` : "");
   else if (r.out || r.err) parts.push(`<pre class="cout">${r.out ? esc(r.out) : ""}${r.err ? `<span class="err">${esc(r.err)}</span>` : ""}</pre>`);
   if (r.tables) parts.push(r.tables.map(t => tableHTML(t.cols, t.rows, 50)).join(""));
-  if (!r.compile && !r.out && !r.err && !r.tables && !(r.streamed && stream && stream.innerHTML)) parts.push(`<p class="note">Программа ничего не вывела.</p>`);
+  if (r.imgs && r.imgs.length) parts.push(r.imgs.map((b, k) => `<img class="plot" src="data:image/png;base64,${b}" alt="График ${k + 1}">`).join(""));
+  if (!r.compile && !r.out && !r.err && !r.tables && !(r.imgs && r.imgs.length) && !(r.streamed && stream && stream.innerHTML)) parts.push(`<p class="note">Программа ничего не вывела.</p>`);
   const ok = !r.compile && !r.timeout && !r.code;
   parts.push(`<p class="note">${r.timeout ? "⏱ Превышено время выполнения — возможно, бесконечный цикл. " : ""}${r.compile ? "" : ok ? "✓ Завершено" : `Код завершения: ${r.code}`} · ${r.ms} мс · ${r.where === "local" ? "на устройстве" : esc(r.where)}</p>`);
   $("#pl-out").innerHTML = parts.join("");
@@ -363,7 +373,7 @@ async function playRun() {
 function playAction(a, b) {
   switch (a) {
     case "play": openPlay(b.dataset.lang || "py"); return true;
-    case "playLesson": { const L = LANGS[+b.dataset.l], t = L.lessons[+b.dataset.i]; openPlay(L.id === "base" ? "py" : L.id, wrapProgram(L.id, t.code), t.t); return true; }
+    case "playLesson": { const L = LANGS[+b.dataset.l], t = L.lessons[+b.dataset.i], lg = L.cave || L.id; openPlay(lg === "base" ? "py" : lg, wrapProgram(lg, t.code), t.t); return true; }
     case "plRun": playRun(); return true;
     case "plReset": if (ED) { ED.value = PLAY_START[PL.lang]; S.play[PL.lang] = PLAY_START[PL.lang]; const i = $("#pl-in"); if (i) { i.value = PLAY_STDIN[PL.lang] || ""; i.closest("details").open = !!i.value; } save(); } return true;
     case "plCopy": if (ED) { navigator.clipboard && navigator.clipboard.writeText(ED.value).then(() => toast("Код скопирован"), () => toast("Не удалось скопировать")); } return true;

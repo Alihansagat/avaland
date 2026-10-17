@@ -1,0 +1,289 @@
+@lang id=sqlanalytics name=SQL для аналитики land=Пещера аналитики color=#2a9d8f cave=sql track=analyst step=1
+@about Как аналитики отвечают на вопросы бизнеса запросами: метрики, даты, когорты, воронки и удержание на базе интернет-магазина.
+@why Первая, потому что главная работа аналитика — превратить вопрос «как у нас дела?» в точный SQL-запрос. PostgreSQL и дашборды из следующих пещер опираются на эти приёмы.
+
+@lesson Метрики продаж
+Бизнес говорит метриками: выручка, число заказов, средний чек (выручка / заказы), число покупателей, доля повторных покупок. Первое правило — договориться об определениях: какие заказы считаются (только `paid`?), какой период, какая валюта.
+В базе магазина выручка заказа — сумма `price * qty` его позиций. Метрики считают одной CTE с выручкой по заказам и агрегатами поверх неё.
+Делите аккуратно: целое на целое в SQLite и PostgreSQL даёт целое, поэтому умножают на `1.0` или приводят тип. `NULLIF(x, 0)` защищает от деления на ноль.
+```code
+WITH order_revenue AS (
+  SELECT o.id, o.customer_id, o.order_date,
+         SUM(p.price * oi.qty) AS revenue
+  FROM orders o
+  JOIN order_items oi ON oi.order_id = o.id
+  JOIN products p     ON p.id = oi.product_id
+  WHERE o.status = 'paid'
+  GROUP BY o.id
+)
+SELECT COUNT(*)                                   AS orders,
+       COUNT(DISTINCT customer_id)                AS buyers,
+       SUM(revenue)                               AS revenue,
+       ROUND(SUM(revenue) * 1.0 / NULLIF(COUNT(*), 0)) AS avg_check
+FROM order_revenue;
+```
+! Сначала определение метрики, потом запрос
+! `* 1.0` или `CAST` перед делением целых
+! `NULLIF(знаменатель, 0)` — защита от деления на ноль
+? mc Как считается средний чек?
++ Выручка, делённая на число заказов
+- Выручка, делённая на число покупателей
+- Самый частый заказ
+- Средняя цена товара
+= Выручка на покупателя — другая метрика (ARPPU).
+? out Что вернёт запрос?
+```code
+SELECT 7 / 2, 7 * 1.0 / 2;
+```
+> 3 3.5
+> 3, 3.5
+= Целочисленное деление отбрасывает дробную часть.
+? fill Впишите функцию, превращающую 0 в NULL для безопасного деления.
+```code
+SELECT revenue / ___(orders, 0) FROM stats;
+```
+> NULLIF
+> nullif
+= Деление на NULL даёт NULL вместо ошибки.
+? out Что вернёт запрос?
+```code
+WITH t(customer_id, revenue) AS (VALUES (1, 100), (1, 300), (2, 200))
+SELECT COUNT(*), COUNT(DISTINCT customer_id), SUM(revenue) / COUNT(*) FROM t;
+```
+> 3 2 200
+> 3, 2, 200
+= 3 заказа, 2 покупателя, средний чек 600 / 3.
+
+@lesson Даты и динамика
+Динамику показывают по периодам: дни, недели, месяцы. В SQLite месяц даты получают `strftime('%Y-%m', order_date)`, в PostgreSQL — `date_trunc('month', order_date)`.
+Рост к прошлому периоду считают оконной функцией `LAG`: `revenue - LAG(revenue) OVER (ORDER BY month)`. Накопительный итог — `SUM(revenue) OVER (ORDER BY month)`.
+Пропущенные периоды (месяц без продаж) не появятся в GROUP BY — для графиков их добавляют генерацией календаря (`generate_series` в PostgreSQL или рекурсивной CTE).
+```code
+WITH monthly AS (
+  SELECT strftime('%Y-%m', o.order_date) AS month,
+         SUM(p.price * oi.qty)           AS revenue
+  FROM orders o
+  JOIN order_items oi ON oi.order_id = o.id
+  JOIN products p     ON p.id = oi.product_id
+  WHERE o.status = 'paid'
+  GROUP BY month
+)
+SELECT month,
+       revenue,
+       revenue - LAG(revenue) OVER (ORDER BY month)                     AS diff,
+       ROUND(100.0 * revenue / LAG(revenue) OVER (ORDER BY month) - 100, 1) AS growth_pct,
+       SUM(revenue) OVER (ORDER BY month)                               AS running_total
+FROM monthly
+ORDER BY month;
+```
+! `LAG` — значение из предыдущей строки окна
+! Накопительный итог — `SUM() OVER (ORDER BY ...)`
+! Пустые периоды заполняют календарём
+? mc Какая функция даёт значение предыдущего месяца в той же строке?
++ LAG
+- LEAD
+- FIRST
+- PREV
+= LEAD — следующее значение.
+? out Что вернёт запрос?
+```code
+WITH m(month, revenue) AS (VALUES ('2026-07', 100), ('2026-08', 150), ('2026-09', 120))
+SELECT revenue - LAG(revenue) OVER (ORDER BY month) FROM m;
+```
+> NULL 50 -30
+> null 50 -30
+> NULL, 50, -30
+= У первого месяца нет предыдущего.
+? fill Впишите функцию SQLite, выделяющую месяц из даты.
+```code
+SELECT ___('%Y-%m', order_date) FROM orders;
+```
+> strftime
+= В PostgreSQL — date_trunc или to_char.
+? out Что вернёт запрос?
+```code
+WITH m(month, revenue) AS (VALUES ('2026-07', 100), ('2026-08', 150), ('2026-09', 120))
+SELECT SUM(revenue) OVER (ORDER BY month) FROM m;
+```
+> 100 250 370
+> 100, 250, 370
+= Накопительный итог.
+
+@lesson Когорты и удержание
+Когорта — группа пользователей, пришедших в один период (месяц регистрации или первой покупки). Удержание (retention) показывает, какая доля когорты вернулась через 1, 2, 3 месяца.
+Схема запроса: найти первый месяц каждого клиента (`MIN`), посчитать для каждой покупки номер месяца от первого, затем `COUNT(DISTINCT customer_id)` по когорте и номеру месяца, делить на размер когорты.
+Повторные покупки: доля клиентов, у которых больше одного оплаченного заказа — простая метрика лояльности.
+```code
+WITH paid AS (
+  SELECT customer_id, strftime('%Y-%m', order_date) AS month
+  FROM orders WHERE status = 'paid'
+),
+first AS (
+  SELECT customer_id, MIN(month) AS cohort FROM paid GROUP BY customer_id
+),
+activity AS (
+  SELECT f.cohort,
+         (CAST(substr(p.month, 1, 4) AS INT) * 12 + CAST(substr(p.month, 6, 2) AS INT))
+       - (CAST(substr(f.cohort, 1, 4) AS INT) * 12 + CAST(substr(f.cohort, 6, 2) AS INT)) AS month_n,
+         p.customer_id
+  FROM paid p JOIN first f USING (customer_id)
+)
+SELECT cohort, month_n,
+       COUNT(DISTINCT customer_id) AS active,
+       ROUND(100.0 * COUNT(DISTINCT customer_id)
+             / FIRST_VALUE(COUNT(DISTINCT customer_id)) OVER (PARTITION BY cohort ORDER BY month_n), 0) AS retention_pct
+FROM activity
+GROUP BY cohort, month_n
+ORDER BY cohort, month_n;
+```
+! Когорта — по первому действию клиента
+! Месяц 0 когорты — всегда 100%
+! Удержание сравнивают между когортами, а не по одной цифре
+? mc Что такое когорта в продуктовой аналитике?
++ Группа пользователей, впервые пришедших в один и тот же период
+- Самые активные пользователи
+- Пользователи одного города
+- Таблица с заказами
+= Сравнивают поведение когорт со временем.
+? out Что вернёт запрос?
+```code
+WITH t(customer_id, month) AS (VALUES (1, '2026-07'), (1, '2026-09'), (2, '2026-08'))
+SELECT customer_id, MIN(month) FROM t GROUP BY customer_id;
+```
+> 1 2026-07 2 2026-08
+> 1 | 2026-07 2 | 2026-08
+= Первый месяц покупки каждого клиента — его когорта.
+? fill Впишите агрегат, дающий месяц первой покупки клиента.
+```code
+SELECT customer_id, ___(order_date) FROM orders GROUP BY customer_id;
+```
+> MIN
+> min
+= Самая ранняя дата.
+? out Что вернёт запрос?
+```code
+WITH c(customer_id, paid_orders) AS (VALUES (1, 3), (2, 1), (3, 2), (4, 1))
+SELECT ROUND(100.0 * SUM(paid_orders > 1) / COUNT(*)) FROM c;
+```
+> 50.0
+> 50
+= Двое из четырёх клиентов купили повторно.
+
+@lesson Воронки и доли
+Воронка показывает, сколько пользователей прошли шаги: зашёл → добавил в корзину → оплатил. Считают уникальных пользователей на каждом шаге и конверсию от первого шага.
+Удобный приём — условная агрегация: `COUNT(DISTINCT CASE WHEN event = 'cart' THEN user_id END)` в одном запросе вместо трёх. Доли внутри группы — оконная функция: `revenue * 100.0 / SUM(revenue) OVER ()`.
+Правило Парето проверяют накопительной долей: какая доля товаров даёт 80% выручки.
+```code
+-- доля категорий в выручке магазина
+WITH cat AS (
+  SELECT p.category, SUM(p.price * oi.qty) AS revenue
+  FROM order_items oi
+  JOIN orders o   ON o.id = oi.order_id AND o.status = 'paid'
+  JOIN products p ON p.id = oi.product_id
+  GROUP BY p.category
+)
+SELECT category,
+       revenue,
+       ROUND(100.0 * revenue / SUM(revenue) OVER (), 1)                           AS share_pct,
+       ROUND(100.0 * SUM(revenue) OVER (ORDER BY revenue DESC) / SUM(revenue) OVER (), 1) AS cum_pct
+FROM cat
+ORDER BY revenue DESC;
+
+-- воронка по событиям (таблица events(user_id, event))
+-- SELECT COUNT(DISTINCT user_id)                                        AS visited,
+--        COUNT(DISTINCT CASE WHEN event = 'cart' THEN user_id END)      AS carted,
+--        COUNT(DISTINCT CASE WHEN event = 'paid' THEN user_id END)      AS paid
+-- FROM events;
+```
+! Условная агрегация — несколько метрик одним проходом
+! `SUM(...) OVER ()` — итог по всей выборке в каждой строке
+! Конверсию считают от уникальных пользователей, а не событий
+? mc Как одним запросом посчитать пользователей на каждом шаге воронки?
++ COUNT(DISTINCT CASE WHEN event = 'шаг' THEN user_id END) для каждого шага
+- Три отдельных базы
+- GROUP BY user_id без условий
+- Нельзя
+= Условная агрегация.
+? out Что вернёт запрос?
+```code
+WITH e(user_id, event) AS (VALUES (1, 'visit'), (1, 'cart'), (1, 'paid'), (2, 'visit'), (2, 'cart'), (3, 'visit'), (3, 'visit'))
+SELECT COUNT(DISTINCT user_id),
+       COUNT(DISTINCT CASE WHEN event = 'cart' THEN user_id END),
+       COUNT(DISTINCT CASE WHEN event = 'paid' THEN user_id END)
+FROM e;
+```
+> 3 2 1
+> 3, 2, 1
+= Конверсия в оплату — 1 из 3.
+? fill Впишите окно, дающее сумму по всей выборке.
+```code
+SELECT revenue * 100.0 / SUM(revenue) ___ () FROM cat;
+```
+> OVER
+> over
+= Пустое окно — все строки результата.
+? out Что вернёт запрос?
+```code
+WITH c(category, revenue) AS (VALUES ('watches', 600), ('bags', 300), ('accessories', 100))
+SELECT category, 100 * revenue / SUM(revenue) OVER () FROM c ORDER BY revenue DESC LIMIT 1;
+```
+> watches 60
+> watches | 60
+= Доля самой крупной категории.
+
+@exam
+? mc Почему нельзя просто сложить средние чеки по городам, чтобы получить общий средний чек?
++ Средние нужно взвешивать числом заказов, иначе результат искажён
+- Можно, это то же самое
+- Средние нельзя складывать в SQL
+- Нужно умножить на 2
+= Считайте общую выручку / общее число заказов.
+? out Что вернёт запрос?
+```code
+SELECT 1 / 4, ROUND(1 * 100.0 / 4);
+```
+> 0 25.0
+> 0 25
+> 0, 25.0
+= Целое деление и деление с плавающей точкой.
+? fill Впишите оконную функцию для значения из следующей строки.
+```code
+SELECT month, ___(revenue) OVER (ORDER BY month) FROM monthly;
+```
+> LEAD
+> lead
+= LAG — предыдущая, LEAD — следующая.
+? out Что вернёт запрос?
+```code
+WITH o(status) AS (VALUES ('paid'), ('paid'), ('new'), ('cancelled'))
+SELECT SUM(status = 'paid'), COUNT(*) FROM o;
+```
+> 2 4
+> 2, 4
+= В SQLite условие даёт 1 или 0, сумма — число совпадений.
+? mc Что показывает retention месяца 1?
++ Долю когорты, совершившую действие через месяц после первого
+- Число новых клиентов
+- Выручку за месяц
+- Отток за год
+= Месяц 0 — всегда 100%.
+? mc В отчёте нет октября, потому что не было продаж. Как его показать с нулём?
++ Соединить с календарём месяцев через LEFT JOIN и COALESCE(revenue, 0)
+- Удалить другие месяцы
+- Вставить фейковый заказ
+- Никак
+= Пропуски в данных — частая ошибка графиков.
+? out Что вернёт запрос?
+```code
+WITH t(x) AS (VALUES (10), (20), (30))
+SELECT x, SUM(x) OVER (), x * 100 / SUM(x) OVER () FROM t WHERE x = 20;
+```
+> 20 20 100
+> 20, 20, 100
+= Окно считается после WHERE: осталась одна строка, поэтому сумма — 20, а доля — 100%.
+? mc Что сначала нужно сделать, получив вопрос «какая у нас выручка»?
++ Уточнить определение: период, статусы заказов, возвраты, валюту
+- Сразу написать SELECT SUM
+- Построить график
+- Спросить у ChatGPT
+= Неясная метрика — главный источник расхождений в отчётах.

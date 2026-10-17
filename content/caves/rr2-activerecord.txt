@@ -1,0 +1,294 @@
+@lang id=activerecord name=ActiveRecord land=Пещера ActiveRecord color=#cc342d cave=rb track=rails step=2
+@about Данные в Rails: миграции, модели, валидации, связи, запросы без N+1 и колбэки.
+@why Вторая, потому что почти каждое действие контроллера читает или пишет базу. После структуры Rails нужно научиться хранить данные правильно — на этом построены Hotwire-интерфейсы и тесты.
+
+@lesson Миграции и модели
+Миграции меняют схему базы кодом: `bin/rails g migration AddLevelToCourses level:string`. Внутри — `create_table`, `add_column`, `add_index`, `add_reference`. Итоговая схема записывается в `db/schema.rb`.
+Модель наследует `ApplicationRecord` и сразу умеет `create`, `find`, `update`, `destroy`. Атрибуты берутся из столбцов таблицы автоматически.
+Перечисления — `enum :level, { beginner: 0, middle: 1, advanced: 2 }`: появляются методы `course.advanced?` и scope `Course.advanced`.
+```code
+# db/migrate/20261016_create_courses.rb
+class CreateCourses < ActiveRecord::Migration[8.0]
+  def change
+    create_table :courses do |t|
+      t.references :author, null: false, foreign_key: { to_table: :users }
+      t.string :title, null: false, limit: 120
+      t.integer :price, null: false, default: 0
+      t.integer :level, null: false, default: 0
+      t.datetime :published_at
+      t.timestamps
+    end
+    add_index :courses, :title, unique: true
+  end
+end
+
+# app/models/course.rb
+class Course < ApplicationRecord
+  enum :level, { beginner: 0, middle: 1, advanced: 2 }
+  scope :published, -> { where.not(published_at: nil) }
+  scope :free, -> { where(price: 0) }
+end
+
+# Course.create!(title: "ActiveRecord", author: user, level: :middle)
+# Course.published.free.order(created_at: :desc).limit(10)
+```
+! Ограничения дублируйте в базе: `null: false`, уникальные индексы
+! Повторяющиеся условия — в `scope`
+! Применённые миграции не меняют — пишут новую
+? mc Что делает `enum :level, { beginner: 0, middle: 1 }`?
++ Хранит уровень числом и добавляет методы beginner?, middle? и одноимённые scope
+- Создаёт таблицу levels
+- Делает поле строкой
+- Проверяет пароль
+= Удобные методы вокруг целого столбца.
+? out Что выведет код?
+```code
+levels = { beginner: 0, middle: 1, advanced: 2 }
+stored = 2
+puts levels.key(stored)
+puts levels.keys.index(:middle)
+```
+> advanced 1
+= Так enum превращает число в имя и обратно.
+? fill Впишите метод миграции для добавления индекса.
+```code
+___ :courses, :title, unique: true
+```
+> add_index
+= Уникальный индекс защищает от дублей даже при гонке.
+? mc Где посмотреть итоговую структуру базы в Rails?
++ db/schema.rb
+- config/database.yml
+- Gemfile.lock
+- app/models
+= schema.rb генерируется после миграций.
+
+@lesson Валидации и колбэки
+Валидации проверяют данные перед сохранением: `validates :title, presence: true, length: { maximum: 120 }, uniqueness: true`, `validates :price, numericality: { greater_than_or_equal_to: 0 }`.
+`save` вернёт false и заполнит `errors`, `save!` бросит исключение. `course.errors.full_messages` — тексты для формы.
+Колбэки (`before_validation`, `after_create_commit`) запускают код в жизненном цикле записи. Ими нормализуют данные; тяжёлые действия (письма) ставят в очередь в `after_commit`, чтобы не отправить письмо о записи, которую откатили.
+```code
+class User < ApplicationRecord
+  has_secure_password                                # bcrypt: password, authenticate
+  normalizes :email, with: ->(e) { e.strip.downcase }
+
+  validates :email, presence: true, uniqueness: true, format: { with: URI::MailTo::EMAIL_REGEXP }
+  validates :password, length: { minimum: 8 }, allow_nil: true
+
+  after_create_commit -> { WelcomeMailer.with(user: self).welcome.deliver_later }
+end
+
+# user = User.new(email: "  ADA@Mail.KZ ", password: "123")
+# user.valid?               → false
+# user.email                → "ada@mail.kz"
+# user.errors.full_messages → ["Password is too short (minimum is 8 characters)"]
+```
+! Валидации в модели + ограничения в базе
+! `save!` в скриптах и тестах, `save` с проверкой в контроллерах
+! Письма — в `after_commit` и через `deliver_later`
+? mc Чем `save` отличается от `save!`?
++ save возвращает false при ошибке, save! бросает исключение
+- Ничем
+- save! не проверяет валидации
+- save работает только для новых записей
+= Выбор зависит от того, как обрабатывать ошибку.
+? out Что выведет код?
+```code
+email = "  ADA@Mail.KZ "
+normalized = email.strip.downcase
+puts normalized
+puts normalized.match?(/\A[^@\s]+@[^@\s]+\z/)
+```
+> ada@mail.kz true
+= Нормализация перед валидацией.
+? fill Впишите макрос модели для хранения пароля через bcrypt.
+```code
+class User < ApplicationRecord
+  ___
+end
+```
+> has_secure_password
+= Даёт password= и authenticate.
+? mc Почему письмо о регистрации отправляют в after_create_commit, а не after_create?
++ Транзакция может откатиться, и письмо уйдёт о несуществующей записи
+- after_create медленнее
+- after_create не существует
+- Так требует почтовый сервер
+= after_commit срабатывает после фиксации транзакции.
+
+@lesson Связи и N+1
+Связи: `belongs_to :author, class_name: "User"`, `has_many :lessons, dependent: :destroy`, `has_many :students, through: :enrollments`. Получаем `course.lessons`, `user.courses.create(...)`.
+Ленивая загрузка в цикле даёт N+1 запросов. `includes(:author)` загружает связи заранее; `strict_loading` или гем Bullet предупреждают о забытых includes.
+Счётчики — `counter_cache: true` (столбец `lessons_count` обновляется сам) или `left_joins(:lessons).group(:id).count`.
+```code
+class Course < ApplicationRecord
+  belongs_to :author, class_name: "User"
+  has_many :lessons, -> { order(:position) }, dependent: :destroy
+  has_many :enrollments, dependent: :destroy
+  has_many :students, through: :enrollments, source: :user
+end
+
+class Lesson < ApplicationRecord
+  belongs_to :course, counter_cache: true          # courses.lessons_count
+end
+
+class Enrollment < ApplicationRecord
+  belongs_to :user
+  belongs_to :course
+  validates :user_id, uniqueness: { scope: :course_id }
+end
+
+# плохо — 1 + N:
+# Course.all.each { |c| puts c.author.name }
+# хорошо — 2 запроса:
+# Course.includes(:author).each { |c| puts "#{c.title}: #{c.author.name}, уроков #{c.lessons_count}" }
+```
+! `includes` для всех связей, используемых в списке
+! `dependent:` решает судьбу дочерних записей
+! Уникальность пары — валидация + уникальный индекс
+? mc Как избавиться от N+1 при выводе авторов курсов?
++ Course.includes(:author)
+- Course.all.each
+- Курсы по одному через find
+- Убрать авторов
+= includes загружает авторов одним запросом.
+? out Что выведет код?
+```code
+enrollments = [[1, 10], [2, 10], [1, 10], [1, 11]]
+uniq = enrollments.uniq
+puts uniq.size
+puts uniq.count { |user, _| user == 1 }
+```
+> 3 2
+= Уникальность пары (user_id, course_id) убирает дубль.
+? fill Впишите связь «многие ко многим через модель записи».
+```code
+has_many :students, ___: :enrollments, source: :user
+```
+> through
+= has_many :through — через промежуточную модель.
+? mc Что делает `dependent: :destroy` у has_many :lessons?
++ Удаляет уроки вместе с курсом
+- Запрещает удалять курс
+- Удаляет курс при удалении урока
+- Ничего
+= Не остаётся уроков без курса.
+
+@lesson Запросы и транзакции
+Запросы строят цепочкой: `where`, `where.not`, `order`, `limit`, `joins`, `group`, `having`, `pluck`, `select`. Они ленивые — SQL выполнится при первом обращении к результату. `to_sql` показывает запрос.
+Условия передают параметрами: `where("price < ?", max)` или хешем — никогда не вставляйте ввод пользователя в строку SQL.
+Связанные изменения — в `ActiveRecord::Base.transaction do ... end`; при исключении всё откатится. Большие таблицы обходят `find_each` пачками по 1000.
+```code
+# топ-5 курсов по числу студентов за месяц
+# Course.joins(:enrollments)
+#       .where(enrollments: { created_at: 1.month.ago.. })
+#       .group(:id)
+#       .order(Arel.sql("COUNT(enrollments.id) DESC"))
+#       .limit(5)
+#       .pluck(:title)
+
+# безопасно:
+# Course.where("title ILIKE ?", "%#{params[:q]}%")
+# опасно (SQL-инъекция):
+# Course.where("title ILIKE '%#{params[:q]}%'")
+
+# покупка
+# ActiveRecord::Base.transaction do
+#   wallet = user.wallet.lock!
+#   raise ActiveRecord::Rollback if wallet.balance < course.price
+#   wallet.decrement!(:balance, course.price)
+#   user.enrollments.create!(course:)
+# end
+
+# User.where(active: false).find_each { |u| u.update!(archived: true) }
+
+counts = { 1 => 12, 2 => 30, 3 => 7 }
+puts counts.sort_by { -_2 }.first(2).map(&:first).inspect    # [2, 1]
+```
+! Ввод пользователя — только через `?` или хеш
+! `find_each` для обхода больших таблиц
+! `pluck` вместо загрузки целых объектов, когда нужен столбец
+? mc Какой запрос безопасен от SQL-инъекций?
++ Course.where("title = ?", params[:q])
+- Course.where("title = '#{params[:q]}'")
+- Course.find_by_sql("... #{params[:q]}")
+- Все одинаково безопасны
+= Плейсхолдер экранирует значение.
+? out Что выведет код?
+```code
+students = { "Ruby" => 12, "Rails" => 30, "SQL" => 7 }
+puts students.max_by { |_, n| n }.first
+puts students.select { |_, n| n > 10 }.keys.inspect
+```
+> Rails ["Ruby", "Rails"]
+= Как order и where в запросе.
+? fill Впишите метод, возвращающий массив значений одного столбца без создания объектов.
+```code
+Course.where(price: 0).___(:title)
+```
+> pluck
+= pluck выполняет SELECT title.
+? mc Зачем find_each вместо each для миллиона записей?
++ Загружает записи пачками и не держит всё в памяти
+- Быстрее сортирует
+- Удаляет записи
+- Работает без базы
+= По умолчанию пачка — 1000 записей.
+
+@exam
+? mc Где хранят итоговую схему базы Rails-приложения?
++ db/schema.rb
+- config/routes.rb
+- app/models/schema.rb
+- Gemfile
+= Обновляется после db:migrate.
+? fill Впишите метод для жадной загрузки связи.
+```code
+Course.___(:author, :lessons)
+```
+> includes
+= includes решает N+1.
+? out Что выведет код?
+```code
+errors = []
+title = ""
+price = -5
+errors << "Title can't be blank" if title.empty?
+errors << "Price must be >= 0" if price.negative?
+puts errors.size
+puts errors.first
+```
+> 2 Title can't be blank
+= Так валидации собирают ошибки.
+? mc Что делает `has_secure_password`?
++ Хранит пароль хешем bcrypt и добавляет метод authenticate
+- Хранит пароль открытым текстом
+- Шифрует всю таблицу
+- Отправляет пароль на почту
+= В таблице — password_digest.
+? mc Какая валидация обеспечит уникальную почту даже при одновременной регистрации?
++ Уникальный индекс в базе вместе с uniqueness в модели
+- Только uniqueness в модели
+- Проверка в контроллере
+- JavaScript в форме
+= Валидация модели может пропустить гонку.
+? out Что выведет код?
+```code
+courses = [["Ruby", 0], ["Rails", 9000], ["SQL", 0]]
+free = courses.select { _2.zero? }.map(&:first)
+puts free.join(", ")
+```
+> Ruby, SQL
+= Как Course.free.pluck(:title).
+? fill Впишите опцию связи для автоматического счётчика уроков.
+```code
+belongs_to :course, ___: true
+```
+> counter_cache
+= Столбец lessons_count обновляется сам.
+? mc Что делает ActiveRecord::Rollback внутри transaction?
++ Откатывает транзакцию без выброса исключения наружу
+- Удаляет таблицу
+- Перезапускает сервер
+- Сохраняет изменения
+= Удобно для отмены по условию.

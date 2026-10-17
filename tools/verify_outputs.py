@@ -16,14 +16,15 @@ TMP = Path(tempfile.mkdtemp(prefix="ava-verify-"))
 def load():
     subprocess.run([sys.executable, str(ROOT / "build_content.py"), str(TMP / "content.js")], check=True, stdout=subprocess.DEVNULL)
     js = (TMP / "content.js").read_text(encoding="utf-8")
-    data = json.loads(js[js.index("=") + 1:].rstrip().rstrip(";"))
+    first = js.split("\nwindow.AVA_TRACKS=")[0]
+    data = json.loads(first[first.index("=") + 1:].rstrip().rstrip(";"))
     res = []
     for L in data:
         items = [(f"урок {i + 1}, вопрос {j + 1}", q) for i, l in enumerate(L["lessons"]) for j, q in enumerate(l["q"])]
         items += [(f"экзамен, вопрос {j + 1}", q) for j, q in enumerate(L["exam"])]
         for where, q in items:
             if q["t"] == "out":
-                res.append(dict(lang=L["id"], where=where, q=q["q"], c=q.get("c"), ans=q["ans"]))
+                res.append(dict(lang=L.get("cave", L["id"]), src=L["id"], where=L["id"] + " · " + where, q=q["q"], c=q.get("c"), ans=q["ans"]))
     return res
 
 
@@ -67,6 +68,7 @@ def run(cmd, cwd=None, inp=None, timeout=60):
     return p.returncode, p.stdout, p.stderr
 
 
+SWIFT = Path("/tmp/claude-0/sw/root")  # swiftlang .deb from archive.ubuntu.com, unpacked
 GO_PKGS = ["fmt", "strings", "sort", "errors", "strconv", "sync", "time", "os", "math", "slices", "maps", "unicode"]
 
 
@@ -139,6 +141,14 @@ def build(lang, code, d):
         rc, o, e = run(["kotlinc", "a.kt", "-nowarn", "-include-runtime", "-d", "a.jar"], cwd=d, timeout=240)
         if rc: raise RuntimeError(e)
         return ["java", "-jar", "a.jar"]
+    if lang == "swift" and SWIFT.exists():
+        src = code
+        if re.search(r"\b(URL|URLSession|Date|DispatchQueue|JSONDecoder|JSONEncoder|NSString|Data|localizedDescription|String\(format)", code) and "import Foundation" not in code:
+            src = "import Foundation\n" + code
+        (d / "main.swift").write_text(src)
+        rc, o, e = run([str(SWIFT / "usr/libexec/swift/bin/swiftc"), "-resource-dir", str(SWIFT / "usr/lib/swift"), "main.swift", "-o", "a"], cwd=d, timeout=240)
+        if rc: raise RuntimeError(e)
+        return ["env", "LD_LIBRARY_PATH=" + str(SWIFT / "usr/lib/swift/linux"), "./a"]
     return None
 
 

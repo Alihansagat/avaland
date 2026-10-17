@@ -1,0 +1,286 @@
+@lang id=cicd name=CI/CD и облако land=Пещера CI/CD color=#2088ff cave=base track=devops step=3
+@about Автоматизация доставки: GitHub Actions, тесты и сборка в CI, деплой, инфраструктура как код и мониторинг.
+@why Последняя, потому что объединяет Linux и Docker в конвейер: каждый коммит проверяется, собирается и выкатывается сам. Это ежедневная работа DevOps-инженера.
+
+@lesson GitHub Actions
+CI (непрерывная интеграция) запускает проверки на каждый push и pull request: линтер, тесты, сборку. CD (непрерывная доставка) выкатывает успешную сборку на сервер.
+В GitHub Actions пайплайн — YAML-файл в `.github/workflows/`: события `on`, задачи `jobs`, шаги `steps`. Шаг — готовое действие (`uses: actions/checkout@v4`) или команда (`run: npm test`).
+Задачи выполняются параллельно; `needs` задаёт порядок. Матрица `strategy.matrix` запускает тесты на нескольких версиях. Кэш зависимостей ускоряет сборку.
+```code
+# .github/workflows/ci.yml
+name: CI
+on:
+  push: { branches: [main] }
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [20, 22]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test -- --coverage
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t api:${{ github.sha }} .
+```
+! CI запускается на каждый pull request
+! Красный CI — нельзя сливать в main
+! Кэш зависимостей экономит минуты сборки
+? mc Где лежат файлы пайплайнов GitHub Actions?
++ .github/workflows/
+- .git/hooks/
+- ci/
+- docker/
+= Каждый YAML-файл — отдельный workflow.
+? mc Что делает `needs: test` у задачи build?
++ Запускает build только после успешного test
+- Запускает их одновременно
+- Пропускает тесты
+- Удаляет задачу test
+= needs выстраивает задачи в цепочку.
+? fill Впишите готовое действие, скачивающее код репозитория.
+```code
+- uses: actions/___@v4
+```
+> checkout
+= Без него в машине CI нет кода.
+? out Что выведет команда?
+```code
+for node in 20 22; do for os in ubuntu macos; do echo "$os-$node"; done; done | wc -l
+```
+> 4
+= Матрица 2 × 2 даёт четыре запуска.
+
+@lesson Деплой и секреты
+CD после успешного CI: собрать Docker-образ, отправить в реестр, обновить сервер (по SSH, через Kamal, Kubernetes или облачную платформу). Для сайтов и фронтенда — GitHub Pages, Vercel, Netlify.
+Секреты (ключи, пароли, SSH-ключ) хранят в Settings → Secrets репозитория и читают `${{ secrets.NAME }}`; в логах они маскируются. Окружения (`environment: production`) могут требовать ручного подтверждения.
+Стратегии выката: rolling (по одному серверу), blue-green (переключение трафика на готовую копию), canary (сначала небольшой доле пользователей). Всегда должен быть быстрый откат на прошлую версию.
+```code
+# .github/workflows/deploy.yml
+name: Deploy
+on:
+  push: { branches: [main] }
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    permissions: { contents: read, packages: write }
+    steps:
+      - uses: actions/checkout@v4
+      - run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+      - run: |
+          IMAGE=ghcr.io/${{ github.repository }}:${{ github.sha }}
+          docker build -t "$IMAGE" .
+          docker push "$IMAGE"
+      - name: Обновить сервер
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.PROD_HOST }}
+          username: app
+          key: ${{ secrets.PROD_SSH_KEY }}
+          script: |
+            cd /srv/avaland
+            IMAGE_TAG=${{ github.sha }} docker compose up -d --pull always
+            docker image prune -f
+```
+! Секреты — только в Secrets, никогда в коде и YAML
+! Каждый образ помечен коммитом — откат за минуту
+! Продакшен-окружение можно защитить ручным подтверждением
+? mc Как правильно передать SSH-ключ сервера в GitHub Actions?
++ Сохранить в Secrets репозитория и читать через ${{ secrets.ИМЯ }}
+- Записать в workflow-файл
+- Закоммитить в репозиторий
+- Отправить в issue
+= Секреты шифруются и маскируются в логах.
+? mc Что такое canary-релиз?
++ Новая версия сначала получает небольшую долю трафика, затем постепенно всех
+- Релиз ночью
+- Удаление старой версии до проверки
+- Релиз без тестов
+= Проблема затронет немногих пользователей.
+? fill Впишите выражение для чтения секрета в workflow.
+```code
+password: ${{ ___.DB_PASSWORD }}
+```
+> secrets
+= Значение не появится в логах.
+? out Что выведет команда?
+```code
+SHA=3f9c1a2b7e; echo "ghcr.io/team/api:${SHA:0:7}"
+```
+> ghcr.io/team/api:3f9c1a2
+= Короткий хеш коммита как тег образа.
+
+@lesson Инфраструктура как код
+Серверы, базы, сети и DNS описывают кодом, а не кликами в панели: Terraform (OpenTofu) создаёт облачные ресурсы, Ansible настраивает серверы. Код хранится в Git, изменения проходят ревью.
+Terraform: `terraform init`, `terraform plan` (что изменится), `terraform apply` (применить). Состояние (state) хранят удалённо и с блокировкой, чтобы двое не меняли инфраструктуру одновременно.
+Kubernetes управляет контейнерами на кластере: Deployment (сколько копий и какой образ), Service (сетевой адрес), Ingress (HTTP-вход), автоматический перезапуск и масштабирование.
+```code
+# main.tf — сервер и DNS-запись
+terraform {
+  required_providers {
+    hcloud = { source = "hetznercloud/hcloud" }
+  }
+  backend "s3" { bucket = "avaland-tfstate", key = "prod.tfstate", region = "eu-central-1" }
+}
+
+resource "hcloud_server" "api" {
+  name        = "avaland-api-1"
+  server_type = "cx22"
+  image       = "ubuntu-24.04"
+  location    = "fsn1"
+  ssh_keys    = ["deploy"]
+}
+
+output "api_ip" { value = hcloud_server.api.ipv4_address }
+
+# k8s/deployment.yaml (фрагмент)
+# kind: Deployment
+# spec:
+#   replicas: 3
+#   template:
+#     spec:
+#       containers:
+#         - name: api
+#           image: ghcr.io/alihansagat/avaland-api:1.4.2
+#           resources: { limits: { memory: 512Mi, cpu: "500m" } }
+#           readinessProbe: { httpGet: { path: /health, port: 3000 } }
+```
+! Инфраструктура — в Git и через ревью
+! Сначала `plan`, потом `apply`
+! State Terraform — удалённо и с блокировкой
+? mc Что показывает `terraform plan`?
++ Какие ресурсы будут созданы, изменены или удалены, без применения изменений
+- Применяет изменения
+- Удаляет всё
+- Показывает счёт за облако
+= apply выполнит план.
+? mc Что делает Deployment в Kubernetes?
++ Поддерживает нужное число копий контейнера с заданным образом и обновляет их
+- Создаёт базу данных
+- Покупает домен
+- Пишет логи
+= Упавшие поды пересоздаются автоматически.
+? fill Впишите команду Terraform для применения изменений.
+```code
+terraform ___
+```
+> apply
+= После проверки plan.
+? out Что выведет команда?
+```code
+printf '+ create\n~ update\n+ create\n- destroy\n' | grep -c '^+'
+```
+> 2
+= В плане два новых ресурса.
+
+@lesson Мониторинг, логи и инциденты
+Мониторинг отвечает «всё ли работает»: метрики (Prometheus + Grafana) — запросы в секунду, ошибки, задержка p95, CPU, память; логи (Loki, ELK) — что происходило; трассировка (OpenTelemetry) — путь запроса через сервисы.
+Алерты настраивают на симптомы для пользователя: доля ошибок 5xx выше 1%, p95 выше 500 мс, сайт не отвечает (внешний uptime-мониторинг). Алерт должен требовать действия, иначе его перестанут замечать.
+Инцидент: восстановить работу (часто откатом), сообщить пользователям, затем написать постмортем без поиска виноватых — причины и действия, чтобы не повторилось. SLO фиксирует цель, например 99.9% успешных запросов за месяц.
+```code
+# Prometheus: доля ошибок за 5 минут
+# sum(rate(http_requests_total{status=~"5.."}[5m])) / sum(rate(http_requests_total[5m])) > 0.01
+
+# p95 задержки
+# histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le)) > 0.5
+
+# допустимый простой при SLO 99.9% в месяц (30 дней)
+minutes=$(( 30 * 24 * 60 ))
+echo "$minutes * 0.001" | bc       # 43.200 минут
+```
+! Алерты — на симптомы для пользователей, а не на каждую мелочь
+! Первое действие в инциденте — восстановить работу
+! Постмортем без поиска виноватых
+? mc На что лучше настраивать алерт?
++ На рост доли ошибок или задержки, которые замечают пользователи
+- На каждое сообщение в логах
+- На загрузку CPU выше 10%
+- На число коммитов
+= Алерт должен означать «нужно действовать».
+? out Что выведет команда?
+```code
+echo $(( 30 * 24 * 60 / 1000 ))
+```
+> 43
+= Около 43 минут простоя в месяц при SLO 99.9%.
+? fill Впишите название документа о разборе инцидента.
+```code
+После инцидента команда пишет ___
+```
+> постмортем
+> postmortem
+= Разбор причин и действий без поиска виноватых.
+? mc Что такое p95 задержки?
++ Время, быстрее которого обработаны 95% запросов
+- Среднее время ответа
+- 95 запросов в секунду
+- Максимальная задержка
+= Среднее скрывает медленные запросы.
+
+@exam
+? mc Чем CI отличается от CD?
++ CI проверяет и собирает каждое изменение, CD автоматически доставляет его на серверы
+- Ничем
+- CD запускает тесты, CI деплоит
+- CI работает только ночью
+= Вместе они образуют конвейер доставки.
+? fill Впишите ключ workflow, задающий события запуска.
+```code
+___:
+  push:
+    branches: [main]
+```
+> on
+= on: push, pull_request, schedule и другие.
+? out Что выведет команда?
+```code
+echo "v1.4.2" | awk -F. '{print $1"."$2"."$3+1}'
+```
+> v1.4.3
+= Увеличение патч-версии.
+? mc Новая версия сломала сайт. Что сделать первым?
++ Откатиться на предыдущую рабочую версию, затем разбираться
+- Искать виноватого
+- Срочно писать новый код в продакшене
+- Ждать, пока само пройдёт
+= Сначала восстановить сервис.
+? mc Зачем хранить state Terraform удалённо с блокировкой?
++ Чтобы команда работала с одним состоянием и не меняла инфраструктуру одновременно
+- Так дешевле
+- Без этого Terraform не запустится
+- Чтобы скрыть код
+= Локальный state теряется и расходится.
+? out Что выведет команда?
+```code
+printf "200\n200\n500\n200\n" | awk '$1 >= 500 {e++} END {print e / NR * 100 "%"}'
+```
+> 25%
+= Доля ошибок 5xx — 1 из 4.
+? fill Впишите тип ресурса Kubernetes, дающий подам постоянный сетевой адрес.
+```code
+kind: ___
+```
+> Service
+> service
+= Deployment управляет подами, Service — доступом к ним.
+? mc Что значит SLO 99.9% доступности за месяц?
++ Цель: не более примерно 43 минут недоступности за 30 дней
+- Сервис никогда не падает
+- 99.9% пользователей довольны
+- 0.1% серверов работают
+= Бюджет ошибок можно тратить на рискованные релизы.

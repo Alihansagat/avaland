@@ -1,0 +1,291 @@
+@lang id=aspnet name=ASP.NET Core land=Пещера ASP.NET Core color=#512bd4 cave=cs track=dotnet step=1
+@about Веб-API на .NET: Minimal API и контроллеры, внедрение зависимостей, конфигурация, валидация и аутентификация.
+@why Первая, потому что ASP.NET Core — основа почти всех вакансий .NET-бэкенда. Entity Framework и тесты из следующих пещер подключаются к этому приложению.
+
+@lesson Minimal API и маршруты
+Проект создают командой `dotnet new webapi -n Shop`. В `Program.cs` строится приложение: `var builder = WebApplication.CreateBuilder(args)`, регистрация сервисов, `var app = builder.Build()`, маршруты и `app.Run()`.
+Minimal API описывает эндпоинты прямо лямбдами: `app.MapGet("/api/products/{id:int}", (int id) => ...)`. Параметры пути, строки запроса и тела привязываются автоматически по имени и типу.
+Ответы с нужным статусом дают `Results.Ok(x)`, `Results.NotFound()`, `Results.Created(url, x)`, `Results.BadRequest(...)`; объекты сериализуются в JSON через System.Text.Json.
+```code
+var builder = WebApplication.CreateBuilder(args);
+var app = builder.Build();
+
+var products = new List<Product> { new(1, "Ноутбук", 450_000), new(2, "Мышь", 9_000) };
+
+app.MapGet("/api/products", (int? minPrice) =>
+    products.Where(p => p.Price >= (minPrice ?? 0)));
+
+app.MapGet("/api/products/{id:int}", (int id) =>
+    products.FirstOrDefault(p => p.Id == id) is { } p ? Results.Ok(p) : Results.NotFound());
+
+app.MapPost("/api/products", (CreateProduct dto) =>
+{
+    if (string.IsNullOrWhiteSpace(dto.Name)) return Results.BadRequest(new { error = "name обязателен" });
+    var p = new Product(products.Max(x => x.Id) + 1, dto.Name, dto.Price);
+    products.Add(p);
+    return Results.Created($"/api/products/{p.Id}", p);
+});
+
+app.Run();
+
+record Product(int Id, string Name, int Price);
+record CreateProduct(string Name, int Price);
+```
+! Ограничение `{id:int}` вернёт 404, если в пути не число
+! `record` — короткий способ описать DTO
+! `dotnet watch` перезапускает приложение при изменении кода
+? mc Что вернёт `GET /api/products/abc` для маршрута `/api/products/{id:int}`?
++ 404 — маршрут не совпадёт
+- 500
+- Продукт с id 0
+- 400 с описанием
+= Ограничение типа в шаблоне маршрута.
+? out Что выведет код?
+```code
+var products = new List<(int Id, int Price)> { (1, 450000), (2, 9000), (3, 25000) };
+int? minPrice = 10000;
+Console.WriteLine(products.Count(p => p.Price >= (minPrice ?? 0)));
+```
+> 2
+= Дороже 10 000 два товара.
+? fill Впишите метод для GET-эндпоинта Minimal API.
+```code
+app.___("/health", () => "ok");
+```
+> MapGet
+= MapGet, MapPost, MapPut, MapDelete — по HTTP-методам.
+? mc Какой результат вернуть после создания ресурса?
++ Results.Created(url, item) — статус 201
+- Results.Ok()
+- Results.NoContent()
+- Results.Redirect()
+= 201 с адресом нового ресурса.
+
+@lesson Внедрение зависимостей и слои
+Сервисы регистрируют в `builder.Services`: `AddSingleton` — один экземпляр на приложение, `AddScoped` — один на HTTP-запрос (так работают контексты базы данных), `AddTransient` — новый при каждом запросе зависимости.
+Зависимость получают параметром эндпоинта или конструктора контроллера: `(IOrderService orders) => ...`. Код зависит от интерфейса, реализацию выбирает регистрация — легко подменить в тестах.
+Для больших API используют контроллеры: класс с `[ApiController]` и `[Route("api/[controller]")]`, методы с `[HttpGet]`, `[HttpPost]`; `[ApiController]` сам вернёт 400 при неверной модели.
+```code
+public interface IPriceService { decimal Total(decimal sum); }
+
+public class DiscountPriceService : IPriceService
+{
+    public decimal Total(decimal sum) => sum >= 100_000 ? sum * 0.9m : sum;
+}
+
+// Program.cs
+// builder.Services.AddScoped<IPriceService, DiscountPriceService>();
+// builder.Services.AddControllers();
+// app.MapControllers();
+
+[ApiController]
+[Route("api/[controller]")]
+public class CartController : ControllerBase
+{
+    private readonly IPriceService _prices;
+    public CartController(IPriceService prices) => _prices = prices;
+
+    [HttpGet("total")]
+    public ActionResult<decimal> Total([FromQuery] decimal sum)
+        => sum < 0 ? BadRequest("sum >= 0") : Ok(_prices.Total(sum));
+}
+```
+! DbContext — `Scoped`, конфигурация и кэши — `Singleton`
+! Зависите от интерфейсов, регистрируйте реализации в `Program.cs`
+! Нельзя внедрять Scoped-сервис в Singleton
+? mc Какое время жизни у сервиса, зарегистрированного через AddScoped?
++ Один экземпляр на один HTTP-запрос
+- Один на всё приложение
+- Новый при каждом обращении
+- Пока работает сервер, но отдельный для каждого пользователя
+= Scoped — в пределах области запроса.
+? out Что выведет код?
+```code
+decimal Total(decimal sum) => sum >= 100_000 ? sum * 0.9m : sum;
+Console.WriteLine($"{Total(200_000)} {Total(50_000)}");
+```
+> 180000,0 50000
+> 180000.0 50000
+= Скидка 10% только от 100 000. Формат дробной части зависит от культуры.
+? fill Впишите атрибут класса API-контроллера.
+```code
+[___]
+public class OrdersController : ControllerBase {}
+```
+> ApiController
+= [ApiController] включает автоматическую валидацию и привязку.
+? mc Почему нельзя внедрять Scoped-сервис в Singleton?
++ Singleton живёт дольше запроса и удержит объект, который должен был умереть вместе с запросом
+- Это медленно
+- Компилятор запрещает
+- Scoped нельзя внедрять вообще
+= Возникает захваченная зависимость и ошибки с DbContext.
+
+@lesson Конфигурация, логирование и ошибки
+Настройки читают из `appsettings.json`, `appsettings.Development.json`, переменных окружения и секретов пользователя (`dotnet user-secrets`). Удобно привязывать секцию к классу через Options-паттерн: `builder.Services.Configure<ShopOptions>(builder.Configuration.GetSection("Shop"))`.
+Логирование встроено: `ILogger<T>` внедряется в любой сервис, уровни `LogInformation`, `LogWarning`, `LogError`, структурированные параметры `{OrderId}`.
+Ошибки обрабатывают глобально: `app.UseExceptionHandler()` и формат ProblemDetails (`builder.Services.AddProblemDetails()`) — единый JSON с полями `title`, `status`, `detail`.
+```code
+// appsettings.json
+// { "Shop": { "FreeDeliveryFrom": 50000, "Currency": "KZT" },
+//   "ConnectionStrings": { "Db": "Host=localhost;Database=shop;Username=shop" } }
+
+public class ShopOptions
+{
+    public decimal FreeDeliveryFrom { get; set; }
+    public string Currency { get; set; } = "KZT";
+}
+
+public class DeliveryService(IOptions<ShopOptions> options, ILogger<DeliveryService> log)
+{
+    public decimal Cost(decimal orderSum)
+    {
+        var free = orderSum >= options.Value.FreeDeliveryFrom;
+        log.LogInformation("Доставка для заказа {Sum}: бесплатно={Free}", orderSum, free);
+        return free ? 0 : 1500;
+    }
+}
+
+// Program.cs
+// builder.Services.Configure<ShopOptions>(builder.Configuration.GetSection("Shop"));
+// builder.Services.AddScoped<DeliveryService>();
+// builder.Services.AddProblemDetails();
+// app.UseExceptionHandler();
+```
+! Секреты — в user-secrets и переменных окружения, не в appsettings.json в git
+! Пишите логи с параметрами `{Name}`, а не склейкой строк — их удобно искать
+! ProblemDetails — стандартный формат ошибок API
+? mc Где хранить строку подключения с паролем в продакшене?
++ В переменной окружения или хранилище секретов
+- В appsettings.json в репозитории
+- В коде контроллера
+- В README
+= Конфигурация .NET сама читает переменные окружения.
+? out Что выведет код?
+```code
+decimal freeFrom = 50000;
+decimal Cost(decimal sum) => sum >= freeFrom ? 0 : 1500;
+Console.WriteLine(Cost(60000) + Cost(1000));
+```
+> 1500
+= Первый заказ без доставки, второй — 1500.
+? fill Впишите интерфейс для логирования в .NET.
+```code
+public OrderService(___<OrderService> log) {}
+```
+> ILogger
+= ILogger<T> внедряется контейнером.
+? mc Чем полезен ProblemDetails?
++ Единый стандартный формат JSON для ошибок API
+- Шифрует ошибки
+- Ускоряет сервер
+- Отключает логирование
+= Клиенты обрабатывают ошибки одинаково для всех эндпоинтов.
+
+@lesson Аутентификация и авторизация
+Аутентификация отвечает на вопрос «кто это?», авторизация — «что ему можно?». В API чаще всего используют JWT Bearer: `builder.Services.AddAuthentication().AddJwtBearer(...)` и `app.UseAuthentication(); app.UseAuthorization();`.
+Доступ ограничивают атрибутом `[Authorize]` или `.RequireAuthorization()` у эндпоинта; роли — `[Authorize(Roles = "Admin")]`, сложные правила — политики `AddAuthorization(o => o.AddPolicy(...))`.
+Готовые пользователи, хеши паролей и подтверждение почты — в ASP.NET Core Identity. Текущего пользователя получают из `ClaimsPrincipal user`.
+```code
+using System.Security.Claims;
+
+var builder = WebApplication.CreateBuilder(args);
+builder.Services.AddAuthentication().AddJwtBearer();      // параметры — в appsettings: Authentication:Schemes:Bearer
+builder.Services.AddAuthorization(o =>
+    o.AddPolicy("Adult", p => p.RequireClaim("age_verified", "true")));
+var app = builder.Build();
+app.UseAuthentication();
+app.UseAuthorization();
+
+app.MapGet("/api/me", (ClaimsPrincipal user) =>
+    new { id = user.FindFirstValue(ClaimsTypes.NameIdentifier), name = user.Identity?.Name })
+   .RequireAuthorization();
+
+app.MapDelete("/api/admin/users/{id:int}", (int id) => Results.NoContent())
+   .RequireAuthorization(p => p.RequireRole("Admin"));
+
+app.Run();
+```
+! Порядок middleware: `UseAuthentication` перед `UseAuthorization`
+! 401 — не вошёл, 403 — нет прав
+! Для логинов и паролей не изобретайте своё — используйте Identity
+? mc Чем аутентификация отличается от авторизации?
++ Аутентификация определяет, кто пользователь, авторизация — что ему разрешено
+- Это одно и то же
+- Авторизация происходит раньше
+- Аутентификация только для админов
+= Сначала узнаём пользователя, потом проверяем права.
+? mc Что вернёт API на запрос без токена к эндпоинту с RequireAuthorization?
++ 401 Unauthorized
+- 403 Forbidden
+- 404
+- 200
+= Пользователь не аутентифицирован.
+? fill Впишите атрибут, требующий входа для контроллера.
+```code
+[___]
+public class ProfileController : ControllerBase {}
+```
+> Authorize
+= [Authorize] требует аутентифицированного пользователя.
+? out Что выведет код?
+```code
+var roles = new HashSet<string> { "User", "Editor" };
+bool canDelete = roles.Contains("Admin");
+bool canEdit = roles.Contains("Editor") || roles.Contains("Admin");
+Console.WriteLine($"{canDelete} {canEdit}");
+```
+> False True
+= У пользователя нет роли Admin, но есть Editor.
+
+@exam
+? mc Где регистрируют сервисы в ASP.NET Core?
++ В builder.Services в Program.cs
+- В appsettings.json
+- В контроллере
+- В csproj
+= Контейнер зависимостей настраивается до Build().
+? fill Впишите метод регистрации сервиса на время одного запроса.
+```code
+builder.Services.___<IOrderService, OrderService>();
+```
+> AddScoped
+= Scoped — один экземпляр на запрос.
+? out Что выведет код?
+```code
+var ids = new[] { 3, 7, 5 };
+Console.WriteLine(ids.Max() + 1);
+```
+> 8
+= Новый id — максимальный плюс один.
+? mc Что делает `[ApiController]` при неверной модели запроса?
++ Автоматически возвращает 400 с описанием ошибок
+- Возвращает 500
+- Пропускает запрос
+- Удаляет поля
+= Автоматическая валидация модели.
+? mc Какой статус вернуть, если пользователь вошёл, но не администратор?
++ 403
+- 401
+- 404
+- 500
+= Аутентифицирован, но прав нет.
+? out Что выведет код?
+```code
+string? name = null;
+Console.WriteLine(string.IsNullOrWhiteSpace(name) ? "400" : "201");
+```
+> 400
+= Пустое имя — ошибка валидации.
+? mc Как получить настройки из секции Shop в типизированном виде?
++ Configure<ShopOptions>(Configuration.GetSection("Shop")) и внедрить IOptions<ShopOptions>
+- Прочитать файл вручную через File.ReadAllText
+- Захардкодить значения
+- Через переменную окружения PATH
+= Options-паттерн.
+? fill Впишите команду, которая запускает приложение с перезапуском при изменениях.
+```code
+dotnet ___
+```
+> watch
+= dotnet watch следит за файлами.

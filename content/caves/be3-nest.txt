@@ -1,0 +1,307 @@
+@lang id=nest name=NestJS land=Пещера NestJS color=#e0234e cave=ts track=node step=3
+@about Фреймворк для больших серверных приложений на TypeScript: модули, контроллеры, сервисы, внедрение зависимостей и тесты.
+@why Последняя, потому что NestJS собирает всё вместе: под капотом Express, данные — через Prisma, а сверху — архитектура, которую ждут в командах. Понять её проще, когда знаешь, что лежит внизу.
+
+@lesson Модули, контроллеры и сервисы
+Приложение NestJS делится на модули по функциям: `UsersModule`, `OrdersModule`. Контроллер (`@Controller`) принимает HTTP-запросы и вызывает сервис; сервис (`@Injectable`) содержит бизнес-логику и работу с данными.
+Декораторы описывают маршруты: `@Get(":id")`, `@Post()`, параметры — `@Param("id")`, `@Body()`, `@Query()`. Контроллер не должен содержать логику — только принять запрос и вернуть результат сервиса.
+Каркас создаёт CLI: `npx @nestjs/cli new shop`, затем `nest g resource books` сгенерирует модуль, контроллер, сервис и DTO.
+```code
+import { Controller, Get, Post, Param, Body, Injectable, Module, NotFoundException, ParseIntPipe } from "@nestjs/common";
+
+@Injectable()
+export class BooksService {
+  private books = [{ id: 1, title: "SICP" }];
+  findAll() { return this.books; }
+  findOne(id: number) {
+    const b = this.books.find(x => x.id === id);
+    if (!b) throw new NotFoundException(`Книга ${id} не найдена`);
+    return b;
+  }
+  create(title: string) {
+    const b = { id: this.books.length + 1, title };
+    this.books.push(b);
+    return b;
+  }
+}
+
+@Controller("books")
+export class BooksController {
+  constructor(private readonly books: BooksService) {}
+  @Get() all() { return this.books.findAll(); }
+  @Get(":id") one(@Param("id", ParseIntPipe) id: number) { return this.books.findOne(id); }
+  @Post() create(@Body() dto: { title: string }) { return this.books.create(dto.title); }
+}
+
+@Module({ controllers: [BooksController], providers: [BooksService] })
+export class BooksModule {}
+```
+! Контроллер тонкий, логика — в сервисе
+! `NotFoundException` сам превратится в ответ 404
+! Один модуль — одна функциональная область
+? mc Где в NestJS должна быть бизнес-логика?
++ В сервисе с декоратором @Injectable
+- В контроллере
+- В main.ts
+- В DTO
+= Контроллер только принимает запрос и вызывает сервис.
+? mc Что делает `ParseIntPipe` в `@Param("id", ParseIntPipe)`?
++ Превращает строку из URL в число и возвращает 400, если это не число
+- Шифрует id
+- Ищет запись в базе
+- Логирует запрос
+= Pipe преобразует и валидирует входные данные.
+? fill Впишите декоратор класса-контроллера.
+```code
+@___("orders")
+export class OrdersController {}
+```
+> Controller
+= @Controller задаёт префикс маршрутов.
+? mc Какой ответ получит клиент, если сервис бросил `NotFoundException`?
++ 404 с сообщением ошибки
+- 500
+- 200 с пустым телом
+- Сервер упадёт
+= Встроенные HTTP-исключения NestJS превращаются в соответствующие коды.
+
+@lesson Внедрение зависимостей
+Dependency Injection: класс не создаёт свои зависимости через `new`, а получает их в конструкторе. NestJS сам создаёт сервисы и передаёт их тем, кто их просит, — достаточно указать тип в конструкторе и зарегистрировать провайдер в модуле.
+Это упрощает тесты: в тесте можно подставить фальшивую реализацию (например, сервис базы в памяти) вместо настоящей. И заменять реализации: локально — почта в консоль, в проде — настоящий SMTP.
+Модули обмениваются провайдерами через `exports` и `imports`. Конфигурацию берут через `ConfigModule` и `ConfigService` из переменных окружения.
+```code
+import { Injectable, Module } from "@nestjs/common";
+
+export abstract class Mailer {
+  abstract send(to: string, text: string): Promise<void>;
+}
+
+@Injectable()
+export class ConsoleMailer extends Mailer {
+  async send(to: string, text: string) { console.log(`письмо ${to}: ${text}`); }
+}
+
+@Injectable()
+export class SignupService {
+  constructor(private readonly mailer: Mailer) {}          // зависимость приходит снаружи
+  async signup(email: string) {
+    await this.mailer.send(email, "Добро пожаловать в AVALAND");
+    return { email };
+  }
+}
+
+@Module({
+  providers: [SignupService, { provide: Mailer, useClass: ConsoleMailer }],
+  exports: [SignupService],
+})
+export class SignupModule {}
+```
+! Зависимости — через конструктор, не через `new` внутри класса
+! Подменяйте реализации через `{ provide, useClass }`
+! Чтобы использовать сервис в другом модуле — `exports` здесь и `imports` там
+? mc Главная польза внедрения зависимостей?
++ Классы слабо связаны: реализации легко заменить, а в тестах подставить заглушки
+- Код выполняется быстрее
+- Не нужен TypeScript
+- Меньше файлов
+= Класс зависит от абстракции, а не от конкретного new.
+? out Что выведет код?
+```code
+interface Mailer { send(to: string): string }
+class FakeMailer implements Mailer { sent: string[] = []; send(to: string) { this.sent.push(to); return "ok"; } }
+class Signup { constructor(private m: Mailer) {} run(e: string) { return this.m.send(e); } }
+const fake = new FakeMailer();
+console.log(new Signup(fake).run("ada@mail.kz"), fake.sent.length);
+```
+> ok 1
+= В Signup внедрена фальшивая реализация — так пишут тесты.
+? mc Что нужно, чтобы сервис UsersService из UsersModule использовать в OrdersModule?
++ Добавить его в exports UsersModule и импортировать UsersModule в OrdersModule
+- Скопировать файл сервиса
+- Сделать new UsersService() в OrdersService
+- Ничего
+= Модули явно объявляют, что отдают наружу.
+? fill Впишите ключ провайдера, которым подменяют класс реализации.
+```code
+{ provide: Mailer, ___: SmtpMailer }
+```
+> useClass
+= useClass указывает, какой класс создать для токена.
+
+@lesson DTO, валидация и Guards
+DTO (Data Transfer Object) — класс, описывающий форму входных данных. С библиотекой class-validator поля размечают декораторами `@IsEmail()`, `@MinLength(8)`, а глобальный `ValidationPipe` сам вернёт 400 с описанием ошибок.
+`whitelist: true` выкидывает лишние поля из тела — защита от подмены, например `isAdmin: true` в запросе регистрации.
+Guard решает, пускать ли запрос дальше: проверка JWT, ролей, подписки. Его вешают декоратором `@UseGuards` на контроллер или метод.
+```code
+import { IsEmail, MinLength, IsOptional, IsString } from "class-validator";
+import { CanActivate, ExecutionContext, Injectable, UseGuards, Controller, Post, Body, Get, ValidationPipe } from "@nestjs/common";
+
+export class SignupDto {
+  @IsEmail() email: string;
+  @MinLength(8) password: string;
+  @IsOptional() @IsString() name?: string;
+}
+
+@Injectable()
+export class AdminGuard implements CanActivate {
+  canActivate(ctx: ExecutionContext) {
+    const req = ctx.switchToHttp().getRequest();
+    return req.user?.role === "admin";            // false → 403
+  }
+}
+
+@Controller("admin")
+export class AdminController {
+  @UseGuards(AdminGuard)
+  @Get("stats") stats() { return { users: 1024 }; }
+}
+
+// main.ts
+// app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }));
+```
+! `ValidationPipe` с `whitelist: true` — в каждом проекте
+! Guard возвращает true или false; false даёт 403
+! DTO описывает контракт API и попадает в документацию Swagger
+? mc Зачем `whitelist: true` в ValidationPipe?
++ Удаляет из тела поля, которых нет в DTO, например подложенный isAdmin
+- Разрешает все поля
+- Отключает валидацию
+- Ускоряет JSON
+= Защита от массового присваивания лишних полей.
+? mc Что вернёт API, если Guard вернул false?
++ 403 Forbidden
+- 200
+- 404
+- 500
+= Доступ запрещён.
+? out Что выведет код?
+```code
+const allowed = ["email", "password", "name"];
+const body: Record<string, unknown> = { email: "a@b.kz", password: "12345678", isAdmin: true };
+const clean = Object.fromEntries(Object.entries(body).filter(([k]) => allowed.includes(k)));
+console.log(Object.keys(clean).join(","));
+```
+> email,password
+= Лишнее поле isAdmin отброшено — так работает whitelist.
+? fill Впишите декоратор class-validator для проверки почты.
+```code
+@___() email: string;
+```
+> IsEmail
+= @IsEmail проверяет формат адреса.
+
+@lesson Тесты и документация API
+Модульный тест сервиса создаёт тестовый модуль `Test.createTestingModule` и подменяет зависимости заглушками через `overrideProvider` или `useValue`. Так проверяют логику без базы и сети.
+E2E-тест поднимает приложение целиком и отправляет HTTP-запросы через supertest: `request(app.getHttpServer()).get("/books").expect(200)`.
+Документацию API генерирует `@nestjs/swagger`: по контроллерам и DTO строится страница `/docs`, где фронтенд видит все маршруты и может их вызвать. Это ускоряет работу всей команды.
+```code
+import { Test } from "@nestjs/testing";
+import * as request from "supertest";
+
+describe("SignupService", () => {
+  it("отправляет приветственное письмо", async () => {
+    const mailer = { send: jest.fn().mockResolvedValue(undefined) };
+    const moduleRef = await Test.createTestingModule({
+      providers: [SignupService, { provide: Mailer, useValue: mailer }],
+    }).compile();
+    const service = moduleRef.get(SignupService);
+
+    await service.signup("ada@mail.kz");
+    expect(mailer.send).toHaveBeenCalledWith("ada@mail.kz", expect.stringContaining("Добро пожаловать"));
+  });
+});
+
+describe("Books e2e", () => {
+  it("GET /books отдаёт список", async () => {
+    const moduleRef = await Test.createTestingModule({ imports: [BooksModule] }).compile();
+    const app = moduleRef.createNestApplication();
+    await app.init();
+    await request(app.getHttpServer()).get("/books").expect(200);
+    await app.close();
+  });
+});
+
+// main.ts: SwaggerModule.setup("docs", app, SwaggerModule.createDocument(app, new DocumentBuilder().setTitle("Shop API").build()));
+```
+! В модульных тестах подменяйте базу и внешние сервисы через `useValue`
+! E2E проверяет маршруты, пайпы и guards вместе
+! Swagger по DTO — бесплатная документация для фронтенда
+? mc Как изолировать сервис от настоящей базы в тесте NestJS?
++ Подменить провайдер базы заглушкой через useValue в Test.createTestingModule
+- Удалить базу
+- Запустить тест в проде
+- Нельзя изолировать
+= DI позволяет легко подставить заглушки.
+? mc Для чего Swagger в API?
++ Автоматическая документация маршрутов и моделей, которую можно сразу попробовать
+- Для деплоя
+- Для хранения паролей
+- Для миграций базы
+= Фронтенд и тестировщики видят актуальный контракт API.
+? fill Впишите библиотеку для HTTP-запросов в e2e-тестах NestJS.
+```code
+import * as request from "___";
+```
+> supertest
+= supertest отправляет запросы к приложению без реальной сети.
+? out Что выведет код?
+```code
+const calls: string[][] = [];
+const mailer = { send: (to: string, text: string) => { calls.push([to, text]); } };
+mailer.send("ada@mail.kz", "Добро пожаловать");
+console.log(calls.length, calls[0][1].includes("Добро"));
+```
+> 1 true
+= Заглушка записала вызов — его и проверяют в тесте.
+
+@exam
+? mc Кто создаёт экземпляры сервисов в NestJS?
++ Контейнер внедрения зависимостей NestJS
+- Разработчик через new в контроллере
+- Express
+- База данных
+= Провайдеры создаёт и связывает фреймворк.
+? mc Какой декоратор берёт тело запроса?
++ @Body()
+- @Param()
+- @Query()
+- @Header()
+= @Body() достаёт req.body.
+? fill Впишите декоратор, который делает класс провайдером.
+```code
+@___()
+export class PaymentsService {}
+```
+> Injectable
+= @Injectable позволяет внедрять класс.
+? mc Где проверить, что пользователь — администратор?
++ В Guard
+- В DTO
+- В Pipe преобразования
+- В модуле Swagger
+= Guards отвечают за доступ.
+? out Что выведет код?
+```code
+const routes = [["GET", "/books"], ["GET", "/books/:id"], ["POST", "/books"]];
+console.log(routes.filter(([m]) => m === "GET").length);
+```
+> 2
+= Два GET-маршрута: список и одна книга.
+? mc Что лучше всего описывает роль контроллера?
++ Принять HTTP-запрос, передать данные сервису и вернуть ответ
+- Хранить данные
+- Выполнять SQL
+- Генерировать миграции
+= Логика и данные — в сервисах и репозиториях.
+? mc Зачем DTO-классы, если есть TypeScript-интерфейсы?
++ Классы существуют во время выполнения, поэтому по ним можно валидировать вход и строить Swagger
+- Интерфейсы запрещены в NestJS
+- DTO быстрее
+- Ничем не отличаются
+= Интерфейсы исчезают после компиляции.
+? fill Впишите метод тестового модуля, который возвращает экземпляр сервиса.
+```code
+const service = moduleRef.___(BooksService);
+```
+> get
+= moduleRef.get достаёт провайдер из контейнера.

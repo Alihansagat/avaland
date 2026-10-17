@@ -1,0 +1,294 @@
+@lang id=prisma name=Prisma и PostgreSQL land=Пещера Prisma color=#2d3748 cave=ts track=node step=2
+@about Работа с базой данных из TypeScript: схема, миграции, запросы, связи и транзакции.
+@why Вторая, потому что API без базы данных — игрушка. Prisma даёт типизированный доступ к PostgreSQL и встраивается в сервер Express из первой пещеры.
+
+@lesson Схема и миграции
+Prisma описывает таблицы в файле `schema.prisma` моделями: поля, типы, ключи, связи. По схеме генерируется типизированный клиент — автодополнение и ошибки компиляции, если обратиться к несуществующему полю.
+Изменения схемы применяют миграциями: `npx prisma migrate dev --name add_books` создаёт SQL-файл миграции и применяет его к локальной базе. В продакшене — `prisma migrate deploy`. Миграции хранят в git: так база у всех разработчиков одинаковая.
+Адрес базы задаётся переменной `DATABASE_URL` в `.env`. Для разработки PostgreSQL удобно поднять в Docker.
+```code
+// prisma/schema.prisma
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id        Int      @id @default(autoincrement())
+  email     String   @unique
+  name      String
+  posts     Post[]
+  createdAt DateTime @default(now())
+}
+
+model Post {
+  id        Int      @id @default(autoincrement())
+  title     String
+  published Boolean  @default(false)
+  author    User     @relation(fields: [authorId], references: [id])
+  authorId  Int
+  @@index([authorId])
+}
+
+// терминал:
+// npx prisma migrate dev --name init
+// npx prisma studio      — веб-интерфейс для просмотра таблиц
+```
+! Схема — источник правды, миграции — история её изменений
+! Миграции коммитят в репозиторий вместе с кодом
+! `@unique` и `@@index` — для полей, по которым часто ищут
+? mc Что делает `prisma migrate dev`?
++ Создаёт миграцию из изменений схемы и применяет её к базе разработки
+- Удаляет базу
+- Запускает сервер
+- Генерирует фронтенд
+= Миграция — SQL-файл, который приводит базу к новой схеме.
+? mc Зачем хранить миграции в git?
++ Чтобы у всех разработчиков и на сервере структура базы менялась одинаково и воспроизводимо
+- Чтобы хранить данные пользователей
+- Это ускоряет запросы
+- Git требует
+= Миграции — версия схемы базы, как код.
+? fill Впишите атрибут Prisma, который запрещает повтор значения в столбце.
+```code
+email String @___
+```
+> unique
+= @unique создаёт уникальный индекс.
+? mc Где хранить строку подключения к базе?
++ В переменной окружения DATABASE_URL
+- Прямо в schema.prisma с паролем
+- В коде клиента браузера
+- В README
+= env("DATABASE_URL") читает её из окружения.
+
+@lesson CRUD-запросы
+Клиент Prisma даёт методы для каждой модели: `create`, `findUnique` (по уникальному полю), `findMany` (с фильтром `where`, сортировкой `orderBy`, пагинацией `skip`/`take`), `update`, `delete`, `count`.
+Фильтры составляются объектами: `{ title: { contains: "react", mode: "insensitive" } }`, `{ year: { gte: 2020 } }`, `OR: [...]`. `select` выбирает только нужные поля — меньше данных по сети.
+Все методы асинхронные, результат типизирован: TypeScript знает, какие поля вернутся.
+```code
+import { PrismaClient } from "@prisma/client";
+const prisma = new PrismaClient();
+
+const user = await prisma.user.create({ data: { email: "ada@mail.kz", name: "Ада" } });
+
+await prisma.post.create({ data: { title: "Мой первый пост", authorId: user.id } });
+
+const posts = await prisma.post.findMany({
+  where: { published: false, title: { contains: "пост", mode: "insensitive" } },
+  orderBy: { id: "desc" },
+  take: 10,
+  select: { id: true, title: true },
+});
+
+await prisma.post.update({ where: { id: posts[0].id }, data: { published: true } });
+const total = await prisma.post.count({ where: { published: true } });
+console.log(total);
+```
+! `findUnique` — только по `@id` или `@unique` полям
+! `select` вместо загрузки всех полей
+! Пагинация: `skip` и `take`, а для больших таблиц — курсор
+? mc Чем `findUnique` отличается от `findFirst`?
++ findUnique ищет по уникальному полю и может вернуть не больше одной записи
+- findUnique быстрее, но возвращает массив
+- Ничем
+- findFirst удаляет запись
+= findFirst принимает любой фильтр и берёт первую подходящую запись.
+? out Что выведет код?
+```code
+const posts = [{ id: 1, t: "React" }, { id: 2, t: "vue" }, { id: 3, t: "react hooks" }];
+const found = posts.filter(p => p.t.toLowerCase().includes("react")).map(p => p.id);
+console.log(found);
+```
+> [ 1, 3 ]
+> [1, 3]
+= Так работает фильтр contains с mode: "insensitive".
+? fill Впишите параметр Prisma, ограничивающий число записей.
+```code
+prisma.post.findMany({ ___: 10 })
+```
+> take
+= take — аналог LIMIT, skip — OFFSET.
+? mc Зачем `select` в запросе?
++ Получить только нужные поля и не тащить лишние данные
+- Чтобы удалить остальные поля
+- Для сортировки
+- Это обязательный параметр
+= Меньше данных — быстрее ответ и меньше риск утечки.
+
+@lesson Связи и проблема N+1
+Связи описывают полями-ссылками: у поста `author` и `authorId`, у пользователя — список `posts`. `include` подгружает связанные записи одним запросом: `findMany({ include: { posts: true } })`.
+Проблема N+1: получить 100 пользователей, а потом в цикле по одному запросу за постами каждого — это 101 запрос к базе вместо 1–2. Решение — `include`, `select` со связями или групповые запросы.
+Многие-ко-многим (студенты и курсы) делают через промежуточную модель с двумя внешними ключами — так можно хранить и дополнительные данные связи, например дату записи.
+```code
+// плохо: N+1 запросов
+const users = await prisma.user.findMany();
+for (const u of users) {
+  const posts = await prisma.post.findMany({ where: { authorId: u.id } });   // запрос на каждого
+}
+
+// хорошо: два запроса на всё
+const withPosts = await prisma.user.findMany({
+  include: { posts: { where: { published: true }, select: { title: true } } },
+});
+
+// агрегаты по связям
+const stats = await prisma.user.findMany({
+  select: { name: true, _count: { select: { posts: true } } },
+});
+// [{ name: "Ада", _count: { posts: 3 } }, ...]
+
+// многие-ко-многим через промежуточную модель:
+// model Enrollment { student Student @relation(...), studentId Int,
+//                    course Course @relation(...),  courseId Int,
+//                    enrolledAt DateTime @default(now())  @@id([studentId, courseId]) }
+```
+! Запрос в цикле — главный признак проблемы N+1
+! `include` и `_count` решают большинство случаев
+! Индекс на внешнем ключе ускоряет загрузку связей
+? mc Что такое проблема N+1?
++ Один запрос за списком и ещё по запросу на каждый элемент списка
+- Ошибка в миграции
+- Слишком много индексов
+- Переполнение int
+= 100 элементов — 101 запрос; база и сеть тратят время впустую.
+? out Что выведет код?
+```code
+const users = [{ id: 1 }, { id: 2 }, { id: 3 }];
+let queries = 1;                  // запрос за пользователями
+for (const u of users) queries++; // по запросу за постами каждого
+console.log(queries);
+```
+> 4
+= Три пользователя — четыре запроса. С include было бы 2.
+? fill Впишите параметр Prisma, который подгружает связанные записи.
+```code
+prisma.user.findMany({ ___: { posts: true } })
+```
+> include
+= include добавляет связи в результат.
+? mc Как связать студентов и курсы «многие ко многим» с датой записи?
++ Промежуточная модель с внешними ключами на обе таблицы и полем даты
+- Массив id курсов в строке
+- Две копии таблицы
+- Это невозможно в SQL
+= Таблица связей — стандартный способ.
+
+@lesson Транзакции и надёжность
+Транзакция выполняет несколько операций как одну: либо все, либо ни одной. Классический пример — перевод денег: списать с одного счёта и зачислить на другой. `prisma.$transaction(async tx => { ... })` откатит всё при ошибке.
+Ограничения в базе (`@unique`, внешние ключи, `NOT NULL`, check) — последняя линия защиты: даже если в коде ошибка, база не даст сохранить мусор. Ошибку уникальности Prisma сообщает кодом `P2002` — её превращают в ответ 409.
+Подключение к базе одно на приложение: `new PrismaClient()` создают один раз, а не в каждом запросе, иначе закончатся соединения.
+```code
+async function transfer(fromId: number, toId: number, amount: number) {
+  return prisma.$transaction(async (tx) => {
+    const from = await tx.account.update({
+      where: { id: fromId },
+      data: { balance: { decrement: amount } },
+    });
+    if (from.balance < 0) throw new Error("Недостаточно средств");   // откат всей транзакции
+    await tx.account.update({ where: { id: toId }, data: { balance: { increment: amount } } });
+    return from.balance;
+  });
+}
+
+app.post("/api/users", async (req, res) => {
+  try {
+    res.status(201).json(await prisma.user.create({ data: req.body }));
+  } catch (e: any) {
+    if (e.code === "P2002") return res.status(409).json({ error: "Почта уже занята" });
+    throw e;
+  }
+});
+```
+! Связанные изменения — только в транзакции
+! Ограничения базы страхуют от ошибок в коде
+! Один `PrismaClient` на процесс
+? mc Зачем транзакция при переводе денег?
++ Чтобы списание и зачисление выполнились вместе или не выполнились вовсе
+- Чтобы перевод был быстрее
+- Чтобы записать лог
+- Чтобы зашифровать сумму
+= Иначе при сбое между шагами деньги исчезнут.
+? out Что выведет код?
+```code
+const balances = { a: 100, b: 0 };
+function transfer(amount: number) {
+  const snapshot = { ...balances };
+  balances.a -= amount;
+  try {
+    if (balances.a < 0) throw new Error("мало");
+    balances.b += amount;
+  } catch { Object.assign(balances, snapshot); }
+}
+transfer(150); transfer(30);
+console.log(balances.a, balances.b);
+```
+> 70 30
+= Первый перевод откатился, второй прошёл — модель транзакции.
+? mc Какой HTTP-код вернуть при нарушении уникальности почты?
++ 409 Conflict
+- 500
+- 200
+- 404
+= Конфликт с существующими данными — 409.
+? fill Впишите метод Prisma для транзакции.
+```code
+await prisma.___(async (tx) => { ... });
+```
+> $transaction
+= $transaction выполняет функцию в одной транзакции.
+
+@exam
+? mc Где описывают модели Prisma?
++ В файле schema.prisma
+- В package.json
+- В каждом контроллере
+- В .env
+= Схема — единственный источник структуры базы.
+? mc Что вернёт `findMany` без `where`?
++ Все записи таблицы (поэтому нужна пагинация)
+- Первую запись
+- Ошибку
+- Пустой массив
+= Без фильтра выбираются все строки.
+? out Что выведет код?
+```code
+const page = 4, perPage = 25;
+console.log({ skip: (page - 1) * perPage, take: perPage }.skip);
+```
+> 75
+= Для четвёртой страницы пропускаем 75 записей.
+? mc Как избежать N+1 при выводе пользователей с числом их постов?
++ findMany с select: { _count: { select: { posts: true } } }
+- Запрос count в цикле по пользователям
+- Загрузить все посты и посчитать в браузере
+- Сделать 100 миграций
+= _count считает связи в одном запросе.
+? fill Впишите команду, применяющую миграции в продакшене.
+```code
+npx prisma migrate ___
+```
+> deploy
+= migrate deploy применяет готовые миграции без создания новых.
+? mc Почему нельзя создавать `new PrismaClient()` в каждом обработчике запроса?
++ Каждый клиент открывает свой пул соединений, и база быстро исчерпает лимит подключений
+- Это запрещено лицензией
+- Клиент не работает в функциях
+- Так медленнее компиляция
+= Один клиент на приложение переиспользует соединения.
+? mc Что гарантирует внешний ключ authorId → User.id?
++ Нельзя сохранить пост с несуществующим автором
+- Посты будут отсортированы
+- Автор будет уникален
+- Пароль зашифрован
+= Ссылочная целостность обеспечивается базой.
+? out Что выведет код?
+```code
+const err = { code: "P2002", meta: { target: ["email"] } };
+console.log(err.code === "P2002" ? 409 : 500, err.meta.target[0]);
+```
+> 409 email
+= P2002 — нарушение уникальности; поле — email.

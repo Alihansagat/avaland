@@ -1,0 +1,285 @@
+@lang id=efcore name=Entity Framework Core land=Пещера EF Core color=#68217a cave=cs track=dotnet step=2
+@about ORM для .NET: DbContext, сущности, LINQ-запросы, связи, миграции и производительность.
+@why Вторая, потому что API из первой пещеры должен хранить данные. EF Core — стандартный способ работать с SQL Server и PostgreSQL в .NET, а запросы пишутся на знакомом LINQ.
+
+@lesson DbContext и сущности
+Сущности — обычные классы C#: свойство `Id` становится первичным ключом, остальные — столбцами. `DbContext` описывает базу: свойства `DbSet<Product>` — таблицы. Контекст регистрируют `builder.Services.AddDbContext<ShopDb>(o => o.UseNpgsql(cs))`.
+Настройки моделей задают атрибутами (`[MaxLength(200)]`, `[Required]`) или Fluent API в `OnModelCreating`: уникальные индексы, точность decimal, имена таблиц.
+DbContext — единица работы: изменения накапливаются в памяти и записываются одним вызовом `SaveChangesAsync()` в транзакции.
+```code
+using Microsoft.EntityFrameworkCore;
+
+public class Product
+{
+    public int Id { get; set; }
+    public string Name { get; set; } = "";
+    public decimal Price { get; set; }
+    public int CategoryId { get; set; }
+    public Category Category { get; set; } = null!;
+}
+
+public class Category
+{
+    public int Id { get; set; }
+    public string Title { get; set; } = "";
+    public List<Product> Products { get; set; } = new();
+}
+
+public class ShopDb(DbContextOptions<ShopDb> options) : DbContext(options)
+{
+    public DbSet<Product> Products => Set<Product>();
+    public DbSet<Category> Categories => Set<Category>();
+
+    protected override void OnModelCreating(ModelBuilder b)
+    {
+        b.Entity<Product>().Property(p => p.Price).HasPrecision(12, 2);
+        b.Entity<Product>().HasIndex(p => p.Name);
+        b.Entity<Category>().HasIndex(c => c.Title).IsUnique();
+    }
+}
+```
+! Свойство `Id` или `<Класс>Id` EF Core считает ключом по соглашению
+! Для денег — `decimal` с заданной точностью
+! Все изменения уходят в базу только при `SaveChangesAsync()`
+? mc Что представляет `DbSet<Product>` в DbContext?
++ Таблицу продуктов, к которой можно писать LINQ-запросы
+- Один продукт
+- Файл миграции
+- Кэш в памяти без базы
+= DbSet — точка входа в запросы к таблице.
+? mc Когда изменения сущностей попадут в базу?
++ При вызове SaveChanges или SaveChangesAsync
+- Сразу при изменении свойства
+- При перезапуске приложения
+- Никогда без ручного SQL
+= Контекст отслеживает изменения и сохраняет их пачкой.
+? fill Впишите метод DbContext для настройки модели через Fluent API.
+```code
+protected override void ___(ModelBuilder b) {}
+```
+> OnModelCreating
+= OnModelCreating описывает индексы, связи и типы.
+? out Что выведет код?
+```code
+decimal price = 0.1m + 0.2m;
+double approx = 0.1 + 0.2;
+Console.WriteLine($"{price == 0.3m} {approx == 0.3}");
+```
+> True False
+= decimal точно хранит десятичные дроби, double — нет. Поэтому деньги хранят в decimal.
+
+@lesson LINQ-запросы
+Запросы к базе пишут на LINQ: `Where`, `OrderBy`, `Select`, `Skip`, `Take`, `Count`, `Any`, `GroupBy`. EF Core переводит их в SQL и выполняет, когда результат нужен: `ToListAsync()`, `FirstOrDefaultAsync()`, `CountAsync()`.
+`Select` в анонимный тип или DTO загружает только нужные столбцы — так быстрее и безопаснее, чем тянуть целые сущности. Для чтения без изменений добавляют `AsNoTracking()`.
+Условия, которые EF не может перевести в SQL, вызывают ошибку — не вызывайте внутри запроса свои C#-методы.
+```code
+// в эндпоинте или сервисе
+var page = 1; var size = 20; var q = "ноут";
+
+var items = await db.Products
+    .AsNoTracking()
+    .Where(p => p.Name.ToLower().Contains(q) && p.Price > 0)
+    .OrderByDescending(p => p.Price)
+    .Skip((page - 1) * size)
+    .Take(size)
+    .Select(p => new { p.Id, p.Name, p.Price, Category = p.Category.Title })
+    .ToListAsync();
+
+var stats = await db.Products
+    .GroupBy(p => p.Category.Title)
+    .Select(g => new { Category = g.Key, Count = g.Count(), Avg = g.Average(p => p.Price) })
+    .ToListAsync();
+
+bool hasExpensive = await db.Products.AnyAsync(p => p.Price > 1_000_000);
+```
+! Запрос выполняется только на `ToListAsync`, `FirstOrDefaultAsync` и подобных
+! `AsNoTracking()` для запросов только на чтение
+! `Select` в DTO вместо загрузки всей сущности
+? mc Когда EF Core отправит SQL в базу?
++ При материализации: ToListAsync, FirstAsync, CountAsync и подобных
+- При вызове Where
+- При создании DbContext
+- При компиляции
+= LINQ-запрос строится лениво.
+? out Что выведет код?
+```code
+var prices = new[] { 500, 1500, 3000, 120 };
+var res = prices.Where(p => p > 400).OrderByDescending(p => p).Take(2);
+Console.WriteLine(string.Join(",", res));
+```
+> 3000,1500
+= Фильтр, сортировка по убыванию и две первые.
+? out Что выведет код?
+```code
+var items = new[] { ("a", 10), ("b", 20), ("a", 30) };
+var g = items.GroupBy(x => x.Item1).Select(x => $"{x.Key}:{x.Sum(y => y.Item2)}");
+Console.WriteLine(string.Join(" ", g));
+```
+> a:40 b:20
+= Группировка по ключу и сумма значений.
+? fill Впишите метод LINQ, который пропускает первые элементы для пагинации.
+```code
+db.Products.OrderBy(p => p.Id).___(40).Take(20)
+```
+> Skip
+= Skip(n) пропускает n записей.
+
+@lesson Связи, Include и N+1
+Связи описывают навигационными свойствами: у продукта `Category`, у категории список `Products`. Внешний ключ `CategoryId` EF найдёт по соглашению. Многие-ко-многим EF Core 5+ поддерживает напрямую через два списка.
+Связанные данные по умолчанию не загружаются. `Include(c => c.Products)` подгружает их в том же запросе, `ThenInclude` — следующий уровень. Без этого обращение к пустой навигации даст пустой список или null.
+Ленивая загрузка (lazy loading) удобна, но в циклах порождает N+1 запросов. Включайте логирование SQL (`LogTo(Console.WriteLine)`) и смотрите, что реально уходит в базу.
+```code
+// плохо: N+1
+var categories = await db.Categories.ToListAsync();
+foreach (var c in categories)
+{
+    var count = await db.Products.CountAsync(p => p.CategoryId == c.Id);   // запрос на каждую категорию
+}
+
+// хорошо: один запрос
+var withCounts = await db.Categories
+    .Select(c => new { c.Title, Count = c.Products.Count })
+    .ToListAsync();
+
+// загрузить связанные сущности целиком
+var category = await db.Categories
+    .Include(c => c.Products.Where(p => p.Price > 0))
+    .FirstOrDefaultAsync(c => c.Title == "Ноутбуки");
+
+// Program.cs, разработка:
+// builder.Services.AddDbContext<ShopDb>(o => o.UseNpgsql(cs).LogTo(Console.WriteLine, LogLevel.Information));
+```
+! Запрос внутри цикла — сигнал проблемы N+1
+! `Select` с подсчётом связей — один SQL-запрос
+! Смотрите сгенерированный SQL при разработке
+? mc Что делает `Include(c => c.Products)`?
++ Загружает связанные продукты в том же запросе
+- Добавляет продукты в базу
+- Фильтрует категории
+- Удаляет связь
+= Жадная загрузка навигационного свойства.
+? out Что выведет код?
+```code
+int categories = 12;
+int nPlusOne = 1 + categories;
+Console.WriteLine($"{nPlusOne} vs 1");
+```
+> 13 vs 1
+= Подсчёт в цикле даёт 13 запросов вместо одного.
+? fill Впишите метод для загрузки следующего уровня связей после Include.
+```code
+db.Orders.Include(o => o.Items).___(i => i.Product)
+```
+> ThenInclude
+= ThenInclude продолжает цепочку загрузки.
+? mc Как увидеть SQL, который генерирует EF Core?
++ Включить LogTo или логирование категории Microsoft.EntityFrameworkCore.Database.Command
+- Через Swagger
+- Никак
+- Открыть DbSet в отладчике
+= Логи SQL помогают найти лишние запросы.
+
+@lesson Миграции и транзакции
+Схему базы меняют миграциями: `dotnet ef migrations add AddProductStock` создаёт класс миграции из изменений модели, `dotnet ef database update` применяет её. Миграции хранят в репозитории и проверяют на ревью.
+В продакшене применяют сгенерированный SQL-скрипт (`dotnet ef migrations script --idempotent`) или миграции при старте с осторожностью — не на нескольких экземплярах одновременно.
+`SaveChanges` уже атомарен. Если нужно несколько `SaveChanges` или внешние действия как одно целое — явная транзакция `await using var tx = await db.Database.BeginTransactionAsync()`. Для одновременных изменений защищает `[ConcurrencyCheck]` или `RowVersion`.
+```code
+public async Task<IResult> ReserveAsync(ShopDb db, int productId, int qty)
+{
+    await using var tx = await db.Database.BeginTransactionAsync();
+    var product = await db.Products.FindAsync(productId);
+    if (product is null) return Results.NotFound();
+    if (product.Stock < qty) return Results.Conflict(new { error = "Недостаточно на складе" });
+
+    product.Stock -= qty;
+    db.Reservations.Add(new Reservation { ProductId = productId, Qty = qty });
+    await db.SaveChangesAsync();
+    await tx.CommitAsync();
+    return Results.Ok(new { left = product.Stock });
+}
+
+// терминал:
+// dotnet ef migrations add AddStock
+// dotnet ef database update
+```
+! Миграция на каждое изменение модели, миграции — в git
+! Без `CommitAsync` транзакция откатится при выходе
+! Для конкурентных изменений — токены параллелизма
+? mc Что делает `dotnet ef migrations add Name`?
++ Создаёт миграцию по разнице между моделью и последним снимком схемы
+- Применяет миграции к базе
+- Удаляет базу
+- Создаёт контроллер
+= Применяет — database update.
+? out Что выведет код?
+```code
+int stock = 5, qty = 7;
+string result = stock < qty ? "409" : "200";
+Console.WriteLine($"{result} {(stock < qty ? stock : stock - qty)}");
+```
+> 409 5
+= Товара не хватает — конфликт, остаток не меняется.
+? fill Впишите команду, которая применяет миграции к базе.
+```code
+dotnet ef database ___
+```
+> update
+= database update применяет все неприменённые миграции.
+? mc Когда нужна явная транзакция, если SaveChanges и так атомарен?
++ Когда несколько SaveChanges или операций должны выполниться все вместе или ни одна
+- Всегда для чтения
+- Никогда
+- Только в тестах
+= Явная транзакция объединяет несколько шагов.
+
+@exam
+? mc Как EF Core определяет первичный ключ класса Order по соглашению?
++ По свойству Id или OrderId
+- По первому свойству
+- По атрибуту [Table]
+- Никак, нужен SQL
+= Соглашения EF Core.
+? out Что выведет код?
+```code
+var names = new List<string> { "Ада", "Алан", "Грейс" };
+Console.WriteLine(names.Any(n => n.StartsWith("Г")) + " " + names.Count(n => n.Length > 3));
+```
+> True 2
+= Есть имя на Г; длиннее трёх букв — Алан и Грейс.
+? mc Почему для чтения добавляют AsNoTracking?
++ Контекст не отслеживает изменения сущностей, запрос быстрее и экономит память
+- Чтобы данные нельзя было прочитать
+- Для сортировки
+- Это отключает кэш базы
+= Трекинг нужен только для последующего изменения.
+? fill Впишите метод, сохраняющий изменения асинхронно.
+```code
+await db.___();
+```
+> SaveChangesAsync
+= SaveChangesAsync записывает все отслеживаемые изменения.
+? mc Какой тип использовать для цены товара?
++ decimal
+- double
+- float
+- string
+= decimal не теряет точность десятичных дробей.
+? mc Список категорий с количеством товаров грузится 2 секунды. Логи показывают 300 одинаковых запросов. Что исправить?
++ Убрать запросы в цикле, посчитать через Select(c => new { c.Title, c.Products.Count })
+- Добавить больше памяти серверу
+- Включить ленивую загрузку
+- Убрать индексы
+= Классическая проблема N+1.
+? out Что выведет код?
+```code
+var page = 3; var size = 10;
+Console.WriteLine(Enumerable.Range(1, 45).Skip((page - 1) * size).Take(size).First());
+```
+> 21
+= Третья страница по 10 начинается с 21.
+? fill Впишите метод для жадной загрузки связанной коллекции.
+```code
+db.Categories.___(c => c.Products)
+```
+> Include
+= Include добавляет JOIN и загружает связь.

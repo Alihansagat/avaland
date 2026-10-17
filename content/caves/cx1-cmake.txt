@@ -1,0 +1,297 @@
+@lang id=cmake name=CMake и сборка land=Пещера CMake color=#064f8c cave=cpp track=cppdev step=1
+@about Как собирают настоящие проекты на C++: компиляция и линковка, CMake, библиотеки, зависимости и санитайзеры.
+@why Первая, потому что ни многопоточный код, ни тесты не запустить без системы сборки. Любой C++-проект в компании начинается с CMakeLists.txt.
+
+@lesson Компиляция, линковка и заголовки
+Сборка C++ идёт в два этапа: компилятор превращает каждый `.cpp` в объектный файл `.o`, линкер собирает объектные файлы и библиотеки в программу. Ошибка «undefined reference» — это ошибка линковки: объявление есть, а определения не нашлось.
+Объявления (сигнатуры функций, классы) пишут в заголовках `.h`/`.hpp`, определения — в `.cpp`. Заголовок защищают от повторного включения `#pragma once`.
+Флаги компилятора: `-std=c++20` — стандарт, `-Wall -Wextra` — предупреждения, `-O2` — оптимизация, `-g` — отладочная информация.
+```code
+// math_utils.hpp
+#pragma once
+int gcd(int a, int b);
+
+// math_utils.cpp
+#include "math_utils.hpp"
+int gcd(int a, int b) { return b == 0 ? a : gcd(b, a % b); }
+
+// main.cpp
+#include <iostream>
+#include "math_utils.hpp"
+int main() { std::cout << gcd(84, 36) << "\n"; }    // 12
+
+// сборка вручную:
+// g++ -std=c++20 -Wall -Wextra -O2 -c math_utils.cpp      → math_utils.o
+// g++ -std=c++20 -Wall -Wextra -O2 -c main.cpp            → main.o
+// g++ main.o math_utils.o -o app                           → линковка
+```
+! Ошибка «undefined reference» — проблема линковки, а не синтаксиса
+! В заголовках — объявления, в `.cpp` — определения
+! Всегда собирайте с `-Wall -Wextra`: предупреждения часто указывают на баги
+? mc На каком этапе возникает ошибка «undefined reference to gcd(int, int)»?
++ На этапе линковки
+- На этапе препроцессора
+- При запуске программы
+- При компиляции main.cpp
+= Компилятор поверил объявлению, а линкер не нашёл определение.
+? out Что выведет код?
+```code
+#include <iostream>
+int gcd(int a, int b) { return b == 0 ? a : gcd(b, a % b); }
+int main() { std::cout << gcd(84, 36) << " " << gcd(17, 5) << "\n"; }
+```
+> 12 1
+= Алгоритм Евклида: НОД(84, 36) = 12, НОД(17, 5) = 1.
+? fill Впишите директиву, которая защищает заголовок от повторного включения.
+```code
+#pragma ___
+```
+> once
+= #pragma once поддерживают все основные компиляторы.
+? mc Что делает флаг `-O2`?
++ Включает оптимизации компилятора
+- Добавляет отладочную информацию
+- Задаёт стандарт C++
+- Включает предупреждения
+= -g — отладка, -Wall — предупреждения, -std — стандарт.
+
+@lesson CMakeLists.txt
+CMake описывает проект независимо от компилятора и ОС, а затем генерирует файлы сборки (Makefile, Ninja, проект Visual Studio). Минимальный проект: `cmake_minimum_required`, `project`, `add_executable`.
+Библиотеку описывают `add_library`, связывают с программой `target_link_libraries`. Пути к заголовкам и флаги задают для конкретной цели: `target_include_directories`, `target_compile_features`, `target_compile_options` — это современный CMake.
+Сборка идёт в отдельной папке: `cmake -S . -B build -DCMAKE_BUILD_TYPE=Release`, потом `cmake --build build`.
+```code
+# CMakeLists.txt
+cmake_minimum_required(VERSION 3.20)
+project(bank LANGUAGES CXX)
+
+add_library(bank_core
+    src/account.cpp
+    src/transfer.cpp
+)
+target_include_directories(bank_core PUBLIC include)
+target_compile_features(bank_core PUBLIC cxx_std_20)
+target_compile_options(bank_core PRIVATE -Wall -Wextra -Wpedantic)
+
+add_executable(bank_cli src/main.cpp)
+target_link_libraries(bank_cli PRIVATE bank_core)
+
+# терминал:
+# cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+# cmake --build build -j
+# ./build/bank_cli
+```
+! Настройки — через `target_*`, а не глобальные `include_directories`
+! `PUBLIC` — передаётся тем, кто линкуется с целью, `PRIVATE` — только самой цели
+! Сборка вне исходников: папка `build/` в `.gitignore`
+? mc Что делает `target_link_libraries(app PRIVATE core)`?
++ Связывает программу app с библиотекой core
+- Копирует исходники core в app
+- Устанавливает core в систему
+- Удаляет библиотеку
+= Линковка цели с библиотекой.
+? mc Чем PUBLIC отличается от PRIVATE в target_include_directories?
++ PUBLIC пути видят и цели, которые зависят от этой, PRIVATE — только сама цель
+- PUBLIC работает только на Windows
+- PRIVATE быстрее
+- Ничем
+= Так управляют транзитивными зависимостями.
+? fill Впишите команду CMake, создающую исполняемый файл.
+```code
+___(app src/main.cpp)
+```
+> add_executable
+= add_executable описывает программу.
+? out Что выведет код?
+```code
+#include <iostream>
+#include <string>
+int main() {
+    std::string type = "Release";
+    std::cout << (type == "Debug" ? "-O0 -g" : "-O2") << "\n";
+}
+```
+> -O2
+= Release-сборка — с оптимизациями, Debug — с отладкой.
+
+@lesson Зависимости и пакеты
+Сторонние библиотеки подключают через `find_package` (если библиотека установлена в системе или через vcpkg/Conan) или `FetchContent` — CMake сам скачает исходники при конфигурации.
+vcpkg и Conan — менеджеры пакетов C++: манифест `vcpkg.json` перечисляет зависимости, а сборка получает готовые версии для нужной платформы.
+Популярные библиотеки: fmt (форматирование), spdlog (логирование), nlohmann/json (JSON), Boost (всё подряд), GoogleTest (тесты).
+```code
+# CMakeLists.txt
+include(FetchContent)
+FetchContent_Declare(fmt
+    GIT_REPOSITORY https://github.com/fmtlib/fmt.git
+    GIT_TAG 11.1.4)
+FetchContent_MakeAvailable(fmt)
+
+find_package(nlohmann_json 3.11 REQUIRED)     # через vcpkg или систему
+
+add_executable(report src/report.cpp)
+target_link_libraries(report PRIVATE fmt::fmt nlohmann_json::nlohmann_json)
+
+// src/report.cpp
+// #include <fmt/core.h>
+// #include <nlohmann/json.hpp>
+// int main() {
+//     auto j = nlohmann::json::parse(R"({"user":"Ада","score":95})");
+//     fmt::print("{} набрала {} баллов\n", j["user"].get<std::string>(), j["score"].get<int>());
+// }
+```
+! Фиксируйте версии зависимостей (`GIT_TAG`, версия в vcpkg.json)
+! Линкуйте цели по пространству имён `fmt::fmt`, а не по пути к файлу
+! `REQUIRED` — сборка упадёт сразу, если пакета нет
+? mc Что делает FetchContent?
++ Скачивает исходники зависимости при конфигурации и делает её целью сборки
+- Устанавливает компилятор
+- Загружает готовый exe
+- Публикует пакет
+= Удобно для небольших библиотек без менеджера пакетов.
+? mc Зачем фиксировать версию библиотеки?
++ Чтобы сборка была воспроизводимой и не сломалась при выходе новой версии
+- Чтобы библиотека работала быстрее
+- Это требование лицензии
+- Без версии CMake не запустится
+= Одинаковые версии у всех разработчиков и в CI.
+? fill Впишите команду CMake для поиска установленного пакета.
+```code
+___(fmt REQUIRED)
+```
+> find_package
+= find_package ищет конфигурацию пакета.
+? out Что выведет код?
+```code
+#include <iostream>
+#include <vector>
+#include <string>
+int main() {
+    std::vector<std::string> deps = {"fmt", "spdlog", "fmt", "gtest"};
+    int fmtCount = 0;
+    for (const auto& d : deps) if (d == "fmt") ++fmtCount;
+    std::cout << deps.size() << " " << fmtCount << "\n";
+}
+```
+> 4 2
+= Всего 4 записи, fmt встречается дважды — такие дубли и убирает менеджер пакетов.
+
+@lesson Отладка и санитайзеры
+Отладчик gdb (или lldb, или встроенный в CLion и VS Code) останавливает программу на точках останова и показывает переменные; сборка для этого — `-g -O0` (Debug).
+Санитайзеры находят ошибки памяти во время выполнения: AddressSanitizer (`-fsanitize=address`) — выход за границы массива и использование освобождённой памяти, UndefinedBehaviorSanitizer (`-fsanitize=undefined`) — переполнение знаковых чисел и другие UB, ThreadSanitizer — гонки данных.
+Статические анализаторы (clang-tidy, cppcheck) и форматирование clang-format подключают в CI вместе со сборкой и тестами.
+```code
+#include <iostream>
+#include <vector>
+
+int main() {
+    std::vector<int> v = {1, 2, 3};
+    // v[3] = 4;          // выход за границы: молча портит память
+    v.at(2) = 30;          // at() проверяет индекс и бросает std::out_of_range
+    try {
+        v.at(10) = 1;
+    } catch (const std::out_of_range& e) {
+        std::cout << "поймано: out_of_range\n";
+    }
+    std::cout << v[2] << "\n";       // 30
+}
+
+// CMake: Debug с санитайзерами
+// if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+//   target_compile_options(app PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
+//   target_link_options(app PRIVATE -fsanitize=address,undefined)
+// endif()
+```
+! Собирайте тесты с ASan и UBSan — они ловят ошибки памяти сразу
+! `at()` проверяет границы, `[]` — нет
+! Неопределённое поведение может «работать» годами и упасть в проде
+? mc Что найдёт AddressSanitizer?
++ Выход за границы массива и использование освобождённой памяти
+- Опечатки в именах переменных
+- Медленные функции
+- Ошибки CMake
+= ASan отслеживает доступы к памяти во время выполнения.
+? out Что выведет код?
+```code
+#include <iostream>
+#include <vector>
+#include <stdexcept>
+int main() {
+    std::vector<int> v = {5, 6};
+    try { std::cout << v.at(5); } catch (const std::out_of_range&) { std::cout << "out"; }
+    std::cout << " " << v.at(1) << "\n";
+}
+```
+> out 6
+= at(5) бросает исключение, at(1) возвращает 6.
+? fill Впишите флаг компилятора для AddressSanitizer.
+```code
+-fsanitize=___
+```
+> address
+= -fsanitize=address включает ASan.
+? mc Какой санитайзер ищет гонки данных между потоками?
++ ThreadSanitizer
+- AddressSanitizer
+- UndefinedBehaviorSanitizer
+- MemorySanitizer
+= TSan — для многопоточных ошибок.
+
+@exam
+? mc Что делает команда `cmake -S . -B build`?
++ Конфигурирует проект и генерирует файлы сборки в папке build
+- Компилирует и запускает программу
+- Удаляет build
+- Устанавливает CMake
+= Сборка — следующей командой cmake --build build.
+? mc Объявление функции есть в заголовке, но .cpp с её определением не добавлен в add_executable. Что будет?
++ Ошибка линковки undefined reference
+- Ошибка препроцессора
+- Программа соберётся, но упадёт
+- Всё соберётся
+= Определение не попало в сборку.
+? out Что выведет код?
+```code
+#include <iostream>
+int main() {
+    int a = 7, b = 2;
+    std::cout << a / b << " " << a % b << " " << static_cast<double>(a) / b << "\n";
+}
+```
+> 3 1 3.5
+= Целочисленное деление, остаток и деление с плавающей точкой.
+? fill Впишите команду CMake, связывающую цель с библиотекой.
+```code
+___(app PRIVATE mylib)
+```
+> target_link_libraries
+= target_link_libraries задаёт зависимости цели.
+? mc Какой тип сборки выбрать для отладки в gdb?
++ Debug (-g -O0)
+- Release (-O2)
+- MinSizeRel
+- Без разницы
+= В Debug переменные не оптимизированы и видны в отладчике.
+? mc Зачем clang-format в CI?
++ Чтобы код в репозитории был единообразно отформатирован
+- Чтобы ускорить программу
+- Чтобы найти утечки памяти
+- Чтобы собрать документацию
+= Форматирование не обсуждают на ревью — его проверяет робот.
+? out Что выведет код?
+```code
+#include <iostream>
+#include <vector>
+int main() {
+    std::vector<int> v;
+    v.reserve(10);
+    v.push_back(1);
+    std::cout << v.size() << " " << (v.capacity() >= 10) << "\n";
+}
+```
+> 1 1
+= reserve выделяет память, но не меняет размер; bool выводится как 1.
+? mc Что такое vcpkg?
++ Менеджер пакетов для C и C++
+- Компилятор
+- Отладчик
+- Формат файлов
+= vcpkg устанавливает библиотеки под нужную платформу.

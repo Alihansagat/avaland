@@ -4,7 +4,7 @@
   dist/avaland.html   — single-file web version (Google Fonts, dev time machine)
   app/www/            — offline bundle for Capacitor / App Store (local fonts, no dev tools)
 """
-import shutil, subprocess, sys
+import json, shutil, subprocess, sys
 from pathlib import Path
 
 ROOT = Path(__file__).parent
@@ -33,6 +33,14 @@ def copy_vendor(dest):
     (dest / "vendor").mkdir(parents=True, exist_ok=True)
     for f in (SRC / "vendor").iterdir():
         shutil.copy(f, dest / "vendor" / f.name)
+
+
+def pyodide_version():
+    return json.loads((ROOT / "app" / "node_modules" / "pyodide" / "package.json").read_text())["version"]
+
+
+def worker_src():
+    return (SRC / "py-worker.js").read_text(encoding="utf-8").replace("@PYODIDE_VERSION@", pyodide_version())
 
 
 def copy_pyodide(dest):
@@ -110,7 +118,7 @@ def main():
     (dist / "pyodide" / "python_stdlib.zip").unlink()
     if (dist / "pyodide" / "python_stdlib.txt").exists():
         (dist / "pyodide" / "python_stdlib.txt").unlink()
-    shutil.copy(SRC / "py-worker.js", dist / "py-worker.js")
+    (dist / "py-worker.js").write_text(worker_src(), encoding="utf-8")
 
     # 1b) GitHub Pages copy (docs/play)
     docs_play = ROOT / "docs" / "play"
@@ -133,7 +141,7 @@ def main():
         html = html.replace('<script src="sqljs/sql-wasm.js"></script>', f'<script>window.AVA_SQL_BASE="{cdn_sql}";</script>\n<script src="{cdn_sql}sql-wasm.js"></script>')
         html = html.replace("window.AVA_WEB=true;", 'window.AVA_WEB=true;window.AVA_SW="sw.js";', 1)
         (docs_play / "index.html").write_text(html, encoding="utf-8")
-        worker = (SRC / "py-worker.js").read_text(encoding="utf-8")
+        worker = worker_src()
         worker = worker.replace('import { loadPyodide } from "./pyodide/pyodide.mjs";', f'import {{ loadPyodide }} from "{cdn_py}pyodide.mjs";')
         worker = worker.replace('const base = new URL("pyodide/", import.meta.url).href;', f'const base = "{cdn_py}";')
         worker = worker.replace('const web = new URL(self.location.href).searchParams.has("web");', "const web = false;")
@@ -155,7 +163,7 @@ def main():
     (www / "content.js").write_text(content, encoding="utf-8")
     (www / "app.js").write_text(app, encoding="utf-8")
     (www / "practice.js").write_text(practice, encoding="utf-8")
-    shutil.copy(SRC / "py-worker.js", www / "py-worker.js")
+    (www / "py-worker.js").write_text(worker_src(), encoding="utf-8")
     copy_pyodide(www)
     copy_sqljs(www)
     copy_vendor(www)

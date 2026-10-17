@@ -1,0 +1,348 @@
+@lang id=axum name=Axum и SQLx land=Пещера Axum color=#e8833a cave=rs track=rustback step=3
+@about Веб-сервисы на Rust: роутер Axum, экстракторы, состояние, ошибки, база через SQLx и тесты API.
+@why Последняя, потому что Axum собирает всё вместе: асинхронность Tokio, JSON через Serde и типизированные ошибки. Это стек, на котором Rust-бэкенды работают в продакшене.
+
+@lesson Роутер и обработчики
+Axum строит приложение из роутера: `Router::new().route("/api/books", get(list).post(create))`. Обработчик — обычная async-функция, а её аргументы-экстракторы достают данные из запроса: `Path(id)`, `Query(params)`, `Json(body)`, `State(state)`.
+Ответ — всё, что реализует `IntoResponse`: строка, `Json(value)`, кортеж `(StatusCode, Json(...))`.
+Сервер запускают через `tokio::net::TcpListener` и `axum::serve(listener, app)`.
+```code
+use axum::{extract::{Path, Query}, http::StatusCode, routing::get, Json, Router};
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Clone)]
+struct Book { id: u64, title: String, year: u16 }
+
+#[derive(Deserialize)]
+struct Filter { min_year: Option<u16> }
+
+fn books() -> Vec<Book> {
+    vec![Book { id: 1, title: "The Rust Book".into(), year: 2018 },
+         Book { id: 2, title: "Zero to Production".into(), year: 2022 }]
+}
+
+async fn list(Query(f): Query<Filter>) -> Json<Vec<Book>> {
+    let min = f.min_year.unwrap_or(0);
+    Json(books().into_iter().filter(|b| b.year >= min).collect())
+}
+
+async fn one(Path(id): Path<u64>) -> Result<Json<Book>, (StatusCode, &'static str)> {
+    books().into_iter().find(|b| b.id == id).map(Json).ok_or((StatusCode::NOT_FOUND, "нет книги"))
+}
+
+#[tokio::main]
+async fn main() {
+    let app = Router::new()
+        .route("/api/books", get(list))
+        .route("/api/books/{id}", get(one));
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
+    axum::serve(listener, app).await.unwrap();
+}
+```
+! Аргументы обработчика — экстракторы; `Json` должен быть последним
+! Ответ — любой тип с `IntoResponse`
+! В Axum 0.8 параметры пути пишутся как `{id}`
+? mc Как в Axum получить тело запроса в виде структуры?
++ Аргумент обработчика Json<CreateBook>
+- req.body() вручную
+- Path<CreateBook>
+- State<CreateBook>
+= Экстрактор Json десериализует тело через Serde.
+? mc Что вернёт Axum, если JSON в теле не подходит под структуру?
++ Ошибку клиента (4xx) автоматически, обработчик не вызовется
+- 200
+- Панику сервера
+- Пустую структуру
+= Экстрактор сам отклоняет неверный ввод.
+? fill Впишите функцию Axum для GET-маршрута.
+```code
+Router::new().route("/health", ___(health))
+```
+> get
+= get, post, put, delete из axum::routing.
+? out Что выведет код?
+```code
+struct Book { id: u64, year: u16 }
+
+fn main() {
+    let books = vec![Book { id: 1, year: 2018 }, Book { id: 2, year: 2022 }];
+    let found = books.iter().find(|b| b.id == 3).map(|b| b.year).ok_or("404");
+    let recent = books.iter().filter(|b| b.year >= 2020).count();
+    println!("{:?} {}", found, recent);
+}
+```
+> Err("404") 1
+= Книги 3 нет, а с 2020 года одна.
+
+@lesson Состояние и ошибки
+Общее состояние (пул базы, конфиг, клиенты) передают через `.with_state(state)` и получают экстрактором `State(state)`. Тип состояния должен быть `Clone` — обычно это структура с `Arc` или пулом, который клонируется дёшево.
+Ошибки приложения описывают своим перечислением и реализуют для него `IntoResponse`: каждая ошибка превращается в HTTP-статус и JSON. Тогда обработчики возвращают `Result<Json<T>, AppError>` и пользуются оператором `?`.
+Внутренние детали (текст ошибки базы) логируют, а клиенту отдают общее сообщение.
+```code
+use axum::{extract::State, http::StatusCode, response::{IntoResponse, Response}, Json};
+use serde_json::json;
+use std::sync::Arc;
+
+#[derive(Clone)]
+struct AppState { inner: Arc<Inner> }
+struct Inner { free_delivery_from: u64 }
+
+enum AppError { NotFound(String), BadRequest(String), Internal(String) }
+
+impl IntoResponse for AppError {
+    fn into_response(self) -> Response {
+        let (status, msg) = match self {
+            AppError::NotFound(m) => (StatusCode::NOT_FOUND, m),
+            AppError::BadRequest(m) => (StatusCode::BAD_REQUEST, m),
+            AppError::Internal(detail) => {
+                tracing::error!(%detail, "внутренняя ошибка");
+                (StatusCode::INTERNAL_SERVER_ERROR, "Внутренняя ошибка".to_string())
+            }
+        };
+        (status, Json(json!({ "error": msg }))).into_response()
+    }
+}
+
+async fn delivery(State(st): State<AppState>, axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, u64>>)
+    -> Result<Json<serde_json::Value>, AppError> {
+    let sum = *q.get("sum").ok_or_else(|| AppError::BadRequest("нужен sum".into()))?;
+    let cost = if sum >= st.inner.free_delivery_from { 0 } else { 1500 };
+    Ok(Json(json!({ "cost": cost })))
+}
+
+// let app = Router::new().route("/api/delivery", get(delivery))
+//     .with_state(AppState { inner: Arc::new(Inner { free_delivery_from: 50_000 }) });
+```
+! Состояние — `Clone`, внутри `Arc` или пул соединений
+! Своя ошибка с `IntoResponse` + оператор `?` — чистые обработчики
+! Детали ошибок — в логи, клиенту — общий текст
+? mc Зачем реализовывать IntoResponse для своей ошибки?
++ Чтобы обработчики возвращали Result и ошибки автоматически превращались в нужный статус и JSON
+- Чтобы ошибки не возникали
+- Для сериализации в базу
+- Это требование Serde
+= Так обработка ошибок централизована.
+? out Что выведет код?
+```code
+enum AppError { NotFound, BadRequest, Internal }
+
+fn status(e: &AppError) -> u16 {
+    match e { AppError::NotFound => 404, AppError::BadRequest => 400, AppError::Internal => 500 }
+}
+
+fn main() {
+    let errs = [AppError::BadRequest, AppError::Internal, AppError::NotFound];
+    println!("{:?}", errs.iter().map(status).collect::<Vec<_>>());
+}
+```
+> [400, 500, 404]
+= Каждый вариант ошибки отображается в свой HTTP-статус.
+? fill Впишите метод роутера, передающий общее состояние.
+```code
+let app = Router::new().route("/", get(h)).___(state);
+```
+> with_state
+= with_state делает состояние доступным экстрактору State.
+? mc Что отдать клиенту при ошибке базы данных?
++ 500 с общим сообщением, а подробности записать в лог
+- Полный текст ошибки PostgreSQL с запросом
+- 200
+- Ничего, оборвать соединение
+= Детали внутренних ошибок — информация для злоумышленника.
+
+@lesson SQLx: база данных
+SQLx — асинхронная библиотека для SQL без ORM. Пул соединений создаёт `PgPoolOptions::new().max_connections(10).connect(&url)`, запросы — `sqlx::query_as::<_, Book>("SELECT ... WHERE id = $1").bind(id).fetch_optional(&pool)`.
+Макросы `query!` и `query_as!` проверяют SQL и типы на этапе компиляции по реальной схеме базы — опечатка в имени столбца не даст собрать проект.
+Миграции лежат в папке `migrations/`, создаются командой `sqlx migrate add init` и применяются `sqlx::migrate!().run(&pool)` при старте.
+```code
+use sqlx::{postgres::PgPoolOptions, FromRow, PgPool};
+
+#[derive(Debug, FromRow, serde::Serialize)]
+struct Book { id: i64, title: String, year: i32 }
+
+async fn find_book(pool: &PgPool, id: i64) -> Result<Option<Book>, sqlx::Error> {
+    sqlx::query_as::<_, Book>("SELECT id, title, year FROM books WHERE id = $1")
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+}
+
+async fn create_book(pool: &PgPool, title: &str, year: i32) -> Result<i64, sqlx::Error> {
+    let (id,): (i64,) = sqlx::query_as("INSERT INTO books (title, year) VALUES ($1, $2) RETURNING id")
+        .bind(title).bind(year)
+        .fetch_one(pool).await?;
+    Ok(id)
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let pool = PgPoolOptions::new().max_connections(10)
+        .connect(&std::env::var("DATABASE_URL")?).await?;
+    sqlx::migrate!().run(&pool).await?;
+    let id = create_book(&pool, "Rust for Rustaceans", 2021).await?;
+    println!("{:?}", find_book(&pool, id).await?.map(|b| b.title));
+    Ok(())
+}
+```
+! Параметры только через `$1` и `.bind()` — никакой склейки строк
+! `fetch_optional` для «может не быть», `fetch_one` — «должна быть ровно одна»
+! Миграции применяются при старте приложения или отдельной командой
+? mc Чем полезны макросы sqlx::query!?
++ Проверяют SQL и типы столбцов при компиляции по схеме базы
+- Ускоряют базу
+- Генерируют таблицы
+- Шифруют запросы
+= Ошибки в запросах ловятся до запуска.
+? mc Какой метод SQLx вернёт Option, если строки нет?
++ fetch_optional
+- fetch_one
+- fetch_all
+- execute
+= fetch_one вернёт ошибку RowNotFound.
+? fill Впишите метод SQLx, подставляющий параметр в запрос.
+```code
+sqlx::query("DELETE FROM books WHERE id = $1").___(id)
+```
+> bind
+= bind подставляет значения безопасно.
+? out Что выведет код?
+```code
+fn main() {
+    let rows: Vec<(i64, &str)> = vec![(1, "a"), (2, "b")];
+    let found: Option<&(i64, &str)> = rows.iter().find(|(id, _)| *id == 5);
+    println!("{}", found.map(|r| r.1).unwrap_or("404"));
+}
+```
+> 404
+= Так fetch_optional + map превращается в ответ 404.
+
+@lesson Middleware, тесты и деплой
+Middleware в Axum — слои Tower: `.layer(TraceLayer::new_for_http())` логирует запросы, `CorsLayer` настраивает CORS, `TimeoutLayer` ограничивает время. Свою проверку пишут через `middleware::from_fn`.
+Роутер тестируют без сети: `app.oneshot(Request::builder().uri("/api/books/1").body(Body::empty())?)` возвращает ответ, у которого проверяют статус и тело.
+Для продакшена собирают `cargo build --release` в многоэтапном Docker-образе: итоговый образ содержит только бинарник. Rust-сервисы потребляют мало памяти и стабильно держат нагрузку.
+```code
+use axum::{body::Body, http::{Request, StatusCode}, routing::get, Router};
+use tower::ServiceExt;          // для oneshot
+
+fn app() -> Router {
+    Router::new().route("/health", get(|| async { "ok" }))
+}
+
+#[tokio::test]
+async fn health_returns_ok() {
+    let res = app()
+        .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn unknown_route_is_404() {
+    let res = app()
+        .oneshot(Request::builder().uri("/nope").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+// Dockerfile
+// FROM rust:1.90 AS build
+// WORKDIR /src
+// COPY . .
+// RUN cargo build --release
+// FROM gcr.io/distroless/cc-debian12
+// COPY --from=build /src/target/release/shop /shop
+// ENTRYPOINT ["/shop"]
+```
+! Тесты роутера через `oneshot` — быстрые и без сети
+! `TraceLayer` логирует каждый запрос
+! Многоэтапный Docker-образ: собирать в одном, запускать в минимальном
+? mc Как протестировать маршрут Axum без запуска сервера?
++ Вызвать router.oneshot(request) и проверить ответ
+- Только через curl на запущенном сервере
+- Через браузер
+- Никак
+= Router — это Tower Service.
+? out Что выведет код?
+```code
+fn main() {
+    let routes = ["/health", "/api/books", "/api/books/{id}"];
+    let request = "/nope";
+    let status = if routes.contains(&request) { 200 } else { 404 };
+    println!("{status}");
+}
+```
+> 404
+= Неизвестный маршрут — 404.
+? fill Впишите атрибут асинхронного теста Tokio.
+```code
+#[tokio::___]
+async fn works() {}
+```
+> test
+= #[tokio::test] создаёт рантайм для теста.
+? mc Что делает TraceLayer?
++ Логирует запросы и ответы с временем обработки
+- Шифрует трафик
+- Кэширует ответы
+- Сжимает картинки
+= Слой tower-http для наблюдаемости.
+
+@exam
+? mc Что такое экстрактор в Axum?
++ Аргумент обработчика, который достаёт данные из запроса: Path, Query, Json, State
+- Middleware
+- Тип ошибки
+- Шаблон HTML
+= Экстракторы делают обработчики типобезопасными.
+? fill Впишите экстрактор параметров пути.
+```code
+async fn get_book(___(id): ___<u64>) {}
+```
+> Path
+= Path<T> разбирает сегменты пути.
+? out Что выведет код?
+```code
+fn main() {
+    let sum: u64 = 42_000;
+    let free_from = 50_000;
+    println!("{}", if sum >= free_from { 0 } else { 1500 });
+}
+```
+> 1500
+= Сумма меньше порога бесплатной доставки.
+? mc Почему тип состояния Axum должен быть Clone?
++ Axum клонирует состояние для каждого запроса, поэтому внутри используют Arc или пул
+- Для сериализации
+- Это ошибка дизайна
+- Чтобы изменять его без блокировок
+= Клонирование Arc дешёвое.
+? mc Какой статус вернуть, если в query нет обязательного параметра?
++ 400
+- 404
+- 500
+- 201
+= Ошибка запроса клиента.
+? fill Впишите макрос SQLx для встроенных миграций.
+```code
+sqlx::___!().run(&pool).await?;
+```
+> migrate
+= migrate! встраивает папку migrations в бинарник.
+? out Что выведет код?
+```code
+fn main() {
+    let codes = [200u16, 201, 404, 500];
+    let client_errors = codes.iter().filter(|c| (400..500).contains(*c)).count();
+    println!("{client_errors}");
+}
+```
+> 1
+= Только 404 — ошибка клиента.
+? mc Чем Rust хорош для бэкенда?
++ Высокая производительность и малая память при гарантиях безопасности памяти без сборщика мусора
+- Самый простой синтаксис
+- Не нужен компилятор
+- Автоматически масштабируется
+= Цена — более крутая кривая обучения.

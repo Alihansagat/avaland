@@ -1,0 +1,294 @@
+@lang id=flnav name=Навигация и сеть во Flutter land=Пещера навигации color=#ffca28 cave=dart track=flutter step=3
+@about Готовое Flutter-приложение: go_router, HTTP-запросы, JSON-модели, локальное хранение и публикация.
+@why Последняя, потому что связывает экраны из первой пещеры и состояние из второй в приложение с переходами, сетью и данными на телефоне — таким, какое отправляют в магазины.
+
+@lesson go_router
+go_router описывает экраны как маршруты с адресами: `GoRoute(path: '/courses/:id', builder: ...)`. Переход — `context.go('/courses/7')` (заменить стек) или `context.push(...)` (положить сверху), назад — `context.pop()`.
+Параметры пути читают из `state.pathParameters['id']`, строки запроса — `state.uri.queryParameters`. Адреса работают и как ссылки (deep links) с сайта или из уведомлений.
+`redirect` проверяет доступ: неавторизованного пользователя отправляет на `/login`. `ShellRoute` держит общую нижнюю панель для вкладок.
+```code
+import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
+
+final isLoggedIn = ValueNotifier(false);
+
+final router = GoRouter(
+  initialLocation: '/',
+  refreshListenable: isLoggedIn,
+  redirect: (context, state) {
+    final goingToLogin = state.matchedLocation == '/login';
+    if (!isLoggedIn.value && !goingToLogin) return '/login';
+    if (isLoggedIn.value && goingToLogin) return '/';
+    return null;
+  },
+  routes: [
+    GoRoute(path: '/', builder: (_, __) => const Text('Курсы')),
+    GoRoute(path: '/login', builder: (_, __) => const Text('Вход')),
+    GoRoute(
+      path: '/courses/:id',
+      builder: (_, state) => Text('Курс ${state.pathParameters['id']}'),
+    ),
+  ],
+);
+
+void main() => runApp(MaterialApp.router(routerConfig: router));
+// переход: context.push('/courses/7');   назад: context.pop();
+```
+! `go` заменяет стек, `push` добавляет экран поверх
+! Проверка входа — в `redirect`, а не в каждом экране
+! Маршруты-адреса автоматически поддерживают deep links
+? mc Чем context.go отличается от context.push?
++ go заменяет текущий стек маршрутом, push кладёт новый экран поверх и позволяет вернуться
+- Ничем
+- push работает только на iOS
+- go добавляет экран в историю браузера дважды
+= Для вкладок обычно go, для деталей — push.
+? out Что выведет код?
+```code
+void main() {
+  final uri = Uri.parse('/courses/7?tab=lessons');
+  print('${uri.pathSegments.last} ${uri.queryParameters['tab']}');
+}
+```
+> 7 lessons
+= Так go_router разбирает параметр пути и строку запроса.
+? fill Впишите параметр GoRouter для проверки доступа перед переходом.
+```code
+GoRouter(___: (context, state) => loggedIn ? null : '/login', routes: [...])
+```
+> redirect
+= redirect возвращает новый адрес или null.
+? mc Что вернуть из redirect, если переход разрешён?
++ null
+- Тот же адрес
+- true
+- '/'
+= null означает «ничего не менять».
+
+@lesson HTTP и JSON-модели
+Запросы делают пакетом `http` или `dio`: `final res = await http.get(Uri.parse(url))`, статус — `res.statusCode`, тело — `res.body`. JSON разбирают через `jsonDecode` и превращают в модели конструктором `fromJson`.
+Модели — неизменяемые классы с `final` полями, `fromJson`/`toJson`; в больших проектах их генерируют пакеты `json_serializable` или `freezed`.
+Сетевой код выносят в репозиторий (класс с методами `Future<List<Course>> courses()`), который провайдер Riverpod отдаёт экранам. Ошибки превращают в понятные исключения.
+```code
+import 'dart:convert';
+
+class Course {
+  const Course({required this.id, required this.title, required this.lessons});
+  final int id;
+  final String title;
+  final int lessons;
+
+  factory Course.fromJson(Map<String, dynamic> j) =>
+      Course(id: j['id'] as int, title: j['title'] as String, lessons: (j['lessons_count'] ?? 0) as int);
+
+  Map<String, dynamic> toJson() => {'id': id, 'title': title, 'lessons_count': lessons};
+}
+
+void main() {
+  const body = '[{"id":1,"title":"Dart","lessons_count":8},{"id":2,"title":"Flutter"}]';
+  final list = (jsonDecode(body) as List).map((e) => Course.fromJson(e as Map<String, dynamic>)).toList();
+  print('${list.length} ${list[1].lessons} ${jsonEncode(list.first.toJson())}');
+  // 2 0 {"id":1,"title":"Dart","lessons_count":8}
+}
+
+// реальный запрос:
+// final res = await http.get(Uri.parse('https://api.avaland.kz/courses'));
+// if (res.statusCode != 200) throw ApiException(res.statusCode);
+```
+! Проверяйте `statusCode` — 404 не бросает исключение
+! Модели неизменяемы, с `fromJson` и `toJson`
+! Отсутствующие поля обрабатывайте значениями по умолчанию
+? mc Что вернёт `jsonDecode('[1,2]')`?
++ List<dynamic> со значениями 1 и 2
+- Строку
+- Map
+- Ошибку
+= Массив JSON становится списком Dart.
+? out Что выведет код?
+```code
+import 'dart:convert';
+void main() {
+  final m = jsonDecode('{"title":"Dart","tags":["a","b"]}') as Map<String, dynamic>;
+  print('${m['title']} ${(m['tags'] as List).length} ${m['missing'] ?? 'нет'}');
+}
+```
+> Dart 2 нет
+= Отсутствующий ключ даёт null, ?? подставляет значение.
+? fill Впишите функцию Dart, превращающую объект в JSON-строку.
+```code
+final body = ___(course.toJson());
+```
+> jsonEncode
+= jsonEncode из dart:convert.
+? mc Где лучше разместить код HTTP-запросов?
++ В репозитории, который отдают экранам через провайдер
+- Прямо в build виджета
+- В main
+- В pubspec.yaml
+= Так сеть легко заменить фальшивкой в тестах.
+
+@lesson Хранение на устройстве
+Мелкие настройки сохраняют в `shared_preferences`: `prefs.setInt('goal', 50)`, `prefs.getInt('goal')`. Секреты (токены) — в `flutter_secure_storage` (Keychain на iOS, Keystore на Android).
+Для структурированных данных и офлайн-режима используют базу: Drift (SQLite с типобезопасными запросами), Isar или Hive. Экран читает базу, сеть обновляет её в фоне.
+Файлы (картинки, экспорт) кладут в папку документов приложения через `path_provider`.
+```code
+// pubspec.yaml: shared_preferences, flutter_secure_storage
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+
+class SettingsRepo {
+  SettingsRepo(this._prefs);
+  final SharedPreferences _prefs;
+  static const _secure = FlutterSecureStorage();
+
+  int get dailyGoal => _prefs.getInt('dailyGoal') ?? 50;
+  Future<void> setDailyGoal(int v) => _prefs.setInt('dailyGoal', v.clamp(10, 200));
+
+  Future<void> saveToken(String token) => _secure.write(key: 'token', value: token);
+  Future<String?> token() => _secure.read(key: 'token');
+}
+
+// final prefs = await SharedPreferences.getInstance();
+// final repo = SettingsRepo(prefs);
+// await repo.setDailyGoal(500);   → сохранится 200
+```
+! `shared_preferences` — для настроек, не для секретов
+! Токены — только в secure storage
+! Офлайн: база на устройстве — источник правды
+? mc Где хранить токен авторизации во Flutter-приложении?
++ В flutter_secure_storage
+- В shared_preferences
+- В коде
+- В assets
+= Secure storage использует Keychain и Keystore.
+? out Что выведет код?
+```code
+void main() {
+  int? saved;
+  final goal = saved ?? 50;
+  print('$goal ${500.clamp(10, 200)}');
+}
+```
+> 50 200
+= Значение по умолчанию и ограничение диапазоном.
+? fill Впишите пакет для простых настроек «ключ — значение».
+```code
+import 'package:___/shared_preferences.dart';
+```
+> shared_preferences
+= shared_preferences хранит простые значения.
+? mc Что выбрать для офлайн-списка заметок со сложными запросами?
++ Локальную базу данных, например Drift
+- shared_preferences с JSON-строкой
+- Переменную в памяти
+- Файл .txt
+= База поддерживает запросы, индексы и миграции.
+
+@lesson Сборка и публикация
+Перед публикацией задают имя пакета (applicationId / Bundle ID), иконку (`flutter_launcher_icons`), версию в `pubspec.yaml` (`version: 1.2.0+37` — версия и номер сборки).
+Android: подписать ключом из keystore и собрать `flutter build appbundle` → загрузить .aab в Google Play Console ($25 один раз). iOS: `flutter build ipa` → загрузить через Xcode или Transporter в App Store Connect (нужен Apple Developer за $99 в год).
+CI собирает и тестирует проект автоматически (GitHub Actions, Codemagic). Обфускация `--obfuscate --split-debug-info` усложняет разбор кода, а Crashlytics или Sentry присылают отчёты о падениях.
+```code
+// pubspec.yaml
+// name: avaland
+// version: 1.2.0+37          # 1.2.0 — для людей, 37 — номер сборки
+
+// Android
+// flutter build appbundle --release --obfuscate --split-debug-info=build/symbols
+// iOS
+// flutter build ipa --release
+
+void main() {
+  const version = '1.2.0+37';
+  final parts = version.split('+');
+  final build = int.parse(parts[1]) + 1;
+  print('${parts[0]}+$build');        // 1.2.0+38
+}
+```
+! Номер сборки (после `+`) увеличивают при каждой загрузке
+! Ключ подписи Android храните надёжно — без него не выпустить обновление
+! Сбор падений подключают до первого релиза
+? mc Что означает `version: 1.2.0+37` в pubspec.yaml?
++ 1.2.0 — видимая версия, 37 — номер сборки
+- Тридцать седьмая версия Flutter
+- Минимальная версия Dart
+- Число пользователей
+= Номер сборки должен расти.
+? out Что выведет код?
+```code
+void main() {
+  final v = '2.9.0+101'.split('+');
+  final nums = v[0].split('.').map(int.parse).toList();
+  print('${nums[0]}.${nums[1] + 1}.0+${int.parse(v[1]) + 1}');
+}
+```
+> 2.10.0+102
+= Минорная версия и номер сборки увеличены.
+? fill Впишите команду сборки Android App Bundle.
+```code
+flutter build ___
+```
+> appbundle
+= Google Play принимает .aab.
+? mc Что будет, если потерять ключ подписи Android-приложения (без Play App Signing)?
++ Нельзя будет выпускать обновления этого приложения
+- Ничего
+- Приложение удалится у пользователей
+- Google выдаст новый автоматически
+= Поэтому ключ хранят в надёжном месте или используют Play App Signing.
+
+@exam
+? mc Как перейти на экран деталей курса с возможностью вернуться назад в go_router?
++ context.push('/courses/7')
+- context.go('/')
+- Navigator.pop
+- runApp
+= push добавляет экран в стек.
+? fill Впишите функцию разбора JSON-строки в Dart.
+```code
+final data = ___(response.body);
+```
+> jsonDecode
+= jsonDecode возвращает Map или List.
+? out Что выведет код?
+```code
+void main() {
+  final codes = [200, 201, 404, 500];
+  print(codes.where((c) => c >= 200 && c < 300).length);
+}
+```
+> 2
+= Успешные — 200 и 201.
+? mc Где проверять, вошёл ли пользователь, перед открытием защищённых экранов?
++ В redirect роутера
+- В каждом экране вручную
+- В pubspec.yaml
+- В main.dart без роутера
+= Одна точка проверки для всех маршрутов.
+? mc Почему модель создают через factory fromJson?
++ Чтобы в одном месте преобразовать Map из JSON в типизированный объект с проверкой полей
+- Factory быстрее
+- Так требует Flutter
+- Чтобы объект нельзя было создать
+= Это стандартный паттерн сериализации.
+? out Что выведет код?
+```code
+void main() {
+  final query = Uri.parse('/search?q=dart&page=2').queryParameters;
+  print('${query['q']} ${int.parse(query['page']!) + 1}');
+}
+```
+> dart 3
+= Параметры строки запроса.
+? mc Сколько стоит публикация в Google Play?
++ $25 один раз
+- $99 в год
+- Бесплатно
+- $10 в месяц
+= Разовый регистрационный взнос.
+? fill Впишите хранилище Flutter для секретов.
+```code
+const storage = ___();
+```
+> FlutterSecureStorage
+= Пакет flutter_secure_storage.

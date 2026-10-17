@@ -1,0 +1,326 @@
+@lang id=iosnet name=Сеть и Codable land=Пещера сети iOS color=#30b0c7 cave=swift track=ios step=2
+@about Работа с API в iOS: async/await, URLSession, Codable, обработка ошибок, слой сервисов и тесты.
+@why Вторая, потому что экраны SwiftUI из первой пещеры должны показывать настоящие данные из интернета. Codable и async/await — то, что спрашивают на каждом собеседовании iOS-разработчика.
+
+@lesson async/await и Task
+Асинхронная функция помечается `async`, вызывается через `await` и может бросать ошибки (`async throws`, вызов `try await`). Пока она ждёт сеть, поток свободен для других задач.
+`async let` запускает несколько запросов параллельно, `TaskGroup` — динамическое число параллельных задач. Из синхронного кода асинхронную работу запускают через `Task { ... }`.
+Задачи поддерживают отмену: `Task.checkCancellation()` бросит ошибку, если задачу отменили, — например, пользователь ушёл с экрана.
+```code
+import Foundation
+
+func loadName() async throws -> String {
+    try await Task.sleep(for: .milliseconds(200))
+    return "Ада"
+}
+
+func loadScore() async throws -> Int {
+    try await Task.sleep(for: .milliseconds(200))
+    return 95
+}
+
+let start = Date()
+Task {
+    async let name = loadName()          // оба запроса идут параллельно
+    async let score = loadScore()
+    let (n, s) = try await (name, score)
+    print(n, s, Date().timeIntervalSince(start) < 0.35)     // Ада 95 true
+}
+try? await Task.sleep(for: .milliseconds(500))
+```
+! `async let` — параллельные независимые запросы
+! Ошибки из `async throws` ловят через `do/catch` с `try await`
+! Проверяйте отмену в долгих задачах
+? mc Как выполнить два независимых запроса параллельно?
++ async let для каждого и затем await обоих
+- Вызвать по очереди с await
+- Через DispatchQueue.main.sync
+- Нельзя
+= Время ≈ самому долгому запросу.
+? mc Что значит `try await` перед вызовом?
++ Функция асинхронная и может бросить ошибку
+- Функция синхронная
+- Ошибки игнорируются
+- Вызов будет повторён
+= try — для throws, await — для async.
+? fill Впишите ключевое слово для параллельного запуска асинхронного значения.
+```code
+___ let profile = api.profile()
+```
+> async
+= async let запускает дочернюю задачу.
+? out Что выведет код?
+```code
+func total(_ prices: [Int]) throws -> Int {
+    struct Empty: Error {}
+    guard !prices.isEmpty else { throw Empty() }
+    return prices.reduce(0, +)
+}
+let a = (try? total([100, 250])) ?? -1
+let b = (try? total([])) ?? -1
+print(a, b)
+```
+> 350 -1
+= try? превращает ошибку в nil, ?? подставляет -1.
+
+@lesson URLSession и Codable
+Сетевой запрос: `let (data, response) = try await URLSession.shared.data(from: url)`. Обязательно проверяйте `HTTPURLResponse.statusCode` — URLSession не считает 404 или 500 ошибкой.
+`Codable` превращает JSON в структуры: структура объявляет `Decodable`, `JSONDecoder().decode(T.self, from: data)` делает разбор. `keyDecodingStrategy = .convertFromSnakeCase` переводит `created_at` в `createdAt`, даты — `dateDecodingStrategy = .iso8601`.
+Для POST создают `URLRequest`: метод, заголовок `Content-Type: application/json` и тело `JSONEncoder().encode(body)`.
+```code
+import Foundation
+
+struct Repo: Decodable, Identifiable {
+    let id: Int
+    let name: String
+    let stargazersCount: Int
+}
+
+enum APIError: Error { case badStatus(Int) }
+
+func repos(of user: String) async throws -> [Repo] {
+    let url = URL(string: "https://api.github.com/users/\(user)/repos")!
+    let (data, response) = try await URLSession.shared.data(from: url)
+    guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+    guard (200..<300).contains(http.statusCode) else { throw APIError.badStatus(http.statusCode) }
+    let decoder = JSONDecoder()
+    decoder.keyDecodingStrategy = .convertFromSnakeCase
+    return try decoder.decode([Repo].self, from: data)
+}
+
+let json = #"[{"id": 1, "name": "avaland", "stargazers_count": 42}]"#.data(using: .utf8)!
+let dec = JSONDecoder()
+dec.keyDecodingStrategy = .convertFromSnakeCase
+let parsed = try dec.decode([Repo].self, from: json)
+print(parsed[0].name, parsed[0].stargazersCount)        // avaland 42
+```
+! URLSession не бросает ошибку на 404 и 500 — проверяйте статус сами
+! `convertFromSnakeCase` избавляет от ручных CodingKeys
+! Ошибка декодирования — частая причина «пустого экрана», логируйте её
+? mc Бросит ли `URLSession.shared.data(from:)` ошибку, если сервер ответил 404?
++ Нет, ответ придёт нормально — статус нужно проверить самостоятельно
+- Да, всегда
+- Только для POST
+- Вернёт пустые данные
+= Ошибки — только сетевые сбои вроде отсутствия соединения.
+? out Что выведет код?
+```code
+import Foundation
+struct User: Codable { let firstName: String; let age: Int }
+let data = #"{"first_name": "Ада", "age": 36}"#.data(using: .utf8)!
+let d = JSONDecoder()
+d.keyDecodingStrategy = .convertFromSnakeCase
+let u = try! d.decode(User.self, from: data)
+print(u.firstName, u.age + 1)
+```
+> Ада 37
+= snake_case ключ first_name превратился в firstName.
+? fill Впишите протокол для разбора JSON в структуру.
+```code
+struct Product: ___ { let id: Int; let title: String }
+```
+> Decodable
+> Codable
+= Codable = Decodable + Encodable.
+? mc Как правильно проверить успешный статус ответа?
++ Привести response к HTTPURLResponse и проверить statusCode в диапазоне 200..<300
+- Проверить, что data не пустая
+- Ничего не проверять
+- Сравнить URL
+= Только так видно 4xx и 5xx.
+
+@lesson Слой API и обработка ошибок
+Сетевой код выносят из View в сервис: протокол `CoursesAPI` с методами и реализация на URLSession. Модель экрана получает сервис через инициализатор — в тестах подставляют фальшивый.
+Ошибки превращают в понятные сообщения: нет интернета (`URLError.notConnectedToInternet`), таймаут, 401 (нужно войти заново), 5xx (повторить позже). Пользователь должен видеть, что случилось, и кнопку «Повторить».
+Токены авторизации добавляют в заголовок `Authorization: Bearer ...` в одном месте — в клиенте API, а сами токены хранят в Keychain, а не в UserDefaults.
+```code
+import Foundation
+
+protocol CoursesAPI {
+    func courses() async throws -> [String]
+}
+
+struct LiveCoursesAPI: CoursesAPI {
+    let base = URL(string: "https://api.avaland.kz")!
+    let token: String
+    func courses() async throws -> [String] {
+        var req = URLRequest(url: base.appending(path: "courses"))
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.timeoutInterval = 10
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        guard (resp as? HTTPURLResponse)?.statusCode == 200 else { throw URLError(.badServerResponse) }
+        return try JSONDecoder().decode([String].self, from: data)
+    }
+}
+
+func message(for error: Error) -> String {
+    switch (error as? URLError)?.code {
+    case .notConnectedToInternet?: return "Нет интернета"
+    case .timedOut?: return "Сервер долго не отвечает"
+    default: return "Что-то пошло не так. Повторите позже"
+    }
+}
+
+print(message(for: URLError(.notConnectedToInternet)))    // Нет интернета
+```
+! Сеть — в сервисе за протоколом, не во View
+! Каждой ошибке — понятный текст и кнопка «Повторить»
+! Токены — в Keychain
+? mc Где хранить токен авторизации в iOS-приложении?
++ В Keychain
+- В UserDefaults
+- В коде
+- В имени файла
+= Keychain шифрует данные и защищён системой.
+? out Что выведет код?
+```code
+import Foundation
+func message(for error: Error) -> String {
+    switch (error as? URLError)?.code {
+    case .timedOut?: return "долго"
+    case .notConnectedToInternet?: return "нет сети"
+    default: return "ошибка"
+    }
+}
+print(message(for: URLError(.timedOut)), message(for: CancellationError()))
+```
+> долго ошибка
+= CancellationError — не URLError, срабатывает default.
+? mc Зачем протокол CoursesAPI, если реализация одна?
++ Чтобы в тестах и превью подставить фальшивую реализацию без сети
+- Swift требует протоколы
+- Чтобы ускорить сеть
+- Не нужен
+= Зависимость от абстракции делает модель тестируемой.
+? fill Впишите заголовок HTTP для токена.
+```code
+req.setValue("Bearer \(token)", forHTTPHeaderField: "___")
+```
+> Authorization
+= Authorization: Bearer <токен>.
+
+@lesson Тесты: Swift Testing
+Тесты пишут фреймворком Swift Testing: функция с `@Test`, проверки — `#expect(выражение)` и `#require` (останавливает тест). Асинхронные тесты — просто `async` функции.
+Модель экрана тестируют с фальшивым API: проверяют, что после `load()` состояние стало `.loaded` с нужными данными, а при ошибке — `.failed`.
+Параметризованные тесты: `@Test(arguments: [...])` прогоняет одну функцию на многих входах. Тесты запускают в Xcode (⌘U) или `swift test`.
+```code
+import Testing
+
+struct FakeAPI: CoursesAPI {
+    var result: Result<[String], Error>
+    func courses() async throws -> [String] { try result.get() }
+}
+
+@MainActor
+final class CoursesModel {
+    enum State: Equatable { case loading, loaded([String]), failed }
+    var state = State.loading
+    let api: CoursesAPI
+    init(api: CoursesAPI) { self.api = api }
+    func load() async {
+        do { state = .loaded(try await api.courses()) } catch { state = .failed }
+    }
+}
+
+@Test @MainActor func loadsCourses() async {
+    let model = CoursesModel(api: FakeAPI(result: .success(["Swift", "SwiftUI"])))
+    await model.load()
+    #expect(model.state == .loaded(["Swift", "SwiftUI"]))
+}
+
+@Test @MainActor func showsErrorOnFailure() async {
+    struct Boom: Error {}
+    let model = CoursesModel(api: FakeAPI(result: .failure(Boom())))
+    await model.load()
+    #expect(model.state == .failed)
+}
+
+@Test(arguments: [(2, 8, 25), (8, 8, 100), (0, 5, 0)])
+func progress(done: Int, total: Int, percent: Int) {
+    #expect(done * 100 / total == percent)
+}
+```
+! Фальшивые реализации протоколов — основа тестов моделей
+! `#expect` продолжает тест, `#require` останавливает
+! `@Test(arguments:)` вместо копирования тестов
+? mc Как проверить поведение модели при ошибке сети без интернета?
++ Подставить фальшивый API, который бросает ошибку
+- Выключить Wi-Fi на Mac
+- Ждать настоящей ошибки сервера
+- Нельзя
+= Фальшивка делает тест быстрым и стабильным.
+? out Что выведет код?
+```code
+let cases = [(2, 8, 25), (8, 8, 100), (1, 3, 33)]
+let passed = cases.filter { $0.0 * 100 / $0.1 == $0.2 }.count
+print(passed)
+```
+> 3
+= Целочисленное деление: 100 / 3 = 33.
+? fill Впишите макрос Swift Testing для проверки условия.
+```code
+#___(model.state == .failed)
+```
+> expect
+= #expect записывает провал, но продолжает тест.
+? mc Какая клавиша запускает тесты в Xcode?
++ ⌘U
+- ⌘R
+- ⌘B
+- ⌘T
+= ⌘R — запуск приложения, ⌘B — сборка.
+
+@exam
+? mc Что вернёт `try? decoder.decode(User.self, from: badData)`?
++ nil
+- Пустого пользователя
+- Ошибку компиляции
+- Краш приложения
+= try? превращает ошибку в nil.
+? fill Впишите класс Foundation для разбора JSON.
+```code
+let user = try ___().decode(User.self, from: data)
+```
+> JSONDecoder
+= JSONEncoder — обратное преобразование.
+? out Что выведет код?
+```code
+let statuses = [200, 204, 301, 404, 500]
+print(statuses.filter { (200..<300).contains($0) }.count)
+```
+> 2
+= Успешные — 200 и 204.
+? mc Где выполнять сетевой запрос при появлении экрана?
++ В модификаторе .task, вызывая метод модели
+- Прямо в body
+- В инициализаторе View
+- В AppDelegate
+= body вызывается много раз и должен быть быстрым.
+? mc Пользователь без интернета открыл экран. Что показать?
++ Понятное сообщение «Нет интернета» и кнопку «Повторить»
+- Пустой экран
+- Краш
+- Бесконечный индикатор загрузки
+= Ошибка должна быть понятной и обратимой.
+? out Что выведет код?
+```code
+import Foundation
+struct P: Codable { let name: String; let price: Int }
+let data = try! JSONEncoder().encode(P(name: "A", price: 5))
+let back = try! JSONDecoder().decode(P.self, from: data)
+print(back.name, back.price * 2)
+```
+> A 10
+= Кодирование и обратное декодирование сохраняют данные.
+? mc Зачем `keyDecodingStrategy = .convertFromSnakeCase`?
++ Чтобы ключи вида created_at автоматически сопоставились со свойствами createdAt
+- Чтобы шифровать ключи
+- Для дат
+- Для ускорения
+= Не нужно писать CodingKeys вручную.
+? fill Впишите атрибут функции-теста в Swift Testing.
+```code
+@___ func addsNumbers() { #expect(1 + 1 == 2) }
+```
+> Test
+= @Test отмечает функцию как тест.

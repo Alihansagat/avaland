@@ -1,0 +1,364 @@
+{
+  "ml": {
+    "parent": "py",
+    "title": "Путь ML-инженера",
+    "role": "Junior ML Engineer",
+    "about": "От массивов до нейросетей: данные, графики, классическое машинное обучение и PyTorch. Всё, что спрашивают на собеседовании на первую ML-позицию.",
+    "caves": [
+      "np",
+      "pd",
+      "mpl",
+      "skl",
+      "torch"
+    ],
+    "project": {
+      "title": "ML-проект от данных до модели",
+      "desc": "Возьмите открытый датасет (Kaggle, data.gov.kz) и пройдите весь путь ML-инженера.",
+      "req": [
+        "EDA в Jupyter: пропуски, распределения, корреляции, 5+ графиков с выводами",
+        "Базовая модель и минимум две улучшенные (бустинг, подбор параметров), честная кросс-валидация",
+        "Pipeline scikit-learn без утечек данных",
+        "Нейросеть на PyTorch для той же или похожей задачи и сравнение с классической моделью",
+        "Сервис предсказаний на FastAPI или демо на Streamlit",
+        "README: задача, данные, метрики, выводы и как запустить"
+      ]
+    },
+    "jobs": "Junior ML Engineer, Junior Data Scientist, ML-стажёр"
+  },
+  "fe": {
+    "parent": "js",
+    "title": "Путь фронтенд-разработчика",
+    "role": "Junior Frontend Developer",
+    "about": "От компонентов React до полноценного сайта на Next.js с тестами — стек, который ищут в большинстве вакансий фронтенда.",
+    "caves": [
+      "react",
+      "next",
+      "jstest"
+    ],
+    "project": {
+      "title": "Сайт-каталог на Next.js",
+      "desc": "Каталог курсов или товаров с поиском, корзиной и страницами деталей.",
+      "req": [
+        "React-компоненты с хуками и TypeScript",
+        "Next.js App Router: серверные компоненты, динамические маршруты, SEO-метаданные",
+        "Данные из API или базы, состояния загрузки и ошибок",
+        "Адаптивная вёрстка и доступность (клавиатура, alt, контраст)",
+        "Тесты Vitest + Testing Library и один e2e-тест Playwright",
+        "Деплой на Vercel и README со скриншотами"
+      ]
+    },
+    "jobs": "Junior Frontend Developer, React Developer, стажёр фронтенда"
+  },
+  "node": {
+    "parent": "ts",
+    "title": "Путь Node.js-бэкендера",
+    "role": "Junior Node.js Backend Developer",
+    "about": "Серверная разработка на TypeScript: Express, база данных через Prisma и архитектура NestJS.",
+    "caves": [
+      "express",
+      "prisma",
+      "nest"
+    ],
+    "project": {
+      "title": "REST API онлайн-школы на NestJS",
+      "desc": "Бэкенд с курсами, уроками, записью студентов и авторизацией.",
+      "req": [
+        "NestJS: модули, контроллеры, сервисы, DTO с валидацией",
+        "PostgreSQL через Prisma: схема, миграции, связи",
+        "JWT-авторизация и роли",
+        "Пагинация, фильтры и обработка ошибок",
+        "Unit и e2e-тесты",
+        "Docker Compose и документация Swagger"
+      ]
+    },
+    "jobs": "Junior Node.js Developer, Junior Backend Developer (TypeScript)"
+  },
+  "jvm": {
+    "parent": "java",
+    "title": "Путь Java-бэкендера",
+    "role": "Junior Java Developer",
+    "about": "Корпоративный бэкенд: Spring Boot, работа с базой через JPA и тесты на JUnit — стек банков и крупных компаний.",
+    "caves": [
+      "spring",
+      "jpa",
+      "junit"
+    ],
+    "project": {
+      "title": "Сервис бронирования на Spring Boot",
+      "desc": "REST API бронирования переговорных или столиков.",
+      "req": [
+        "Spring Boot: контроллеры, сервисы, валидация, обработка ошибок",
+        "Spring Data JPA с PostgreSQL и миграциями Flyway",
+        "Spring Security с JWT",
+        "Без N+1: fetch join или EntityGraph",
+        "JUnit 5 + Mockito + Testcontainers",
+        "Docker-образ и README"
+      ]
+    },
+    "jobs": "Junior Java Developer, Junior Backend Developer (Java/Spring)"
+  },
+  "android": {
+    "parent": "kt",
+    "title": "Путь Android-разработчика",
+    "role": "Junior Android Developer",
+    "about": "Современный Android: интерфейсы на Jetpack Compose, данные и корутины, архитектура MVVM.",
+    "caves": [
+      "compose",
+      "androiddata",
+      "androidarch"
+    ],
+    "project": {
+      "title": "Android-приложение «Трекер привычек»",
+      "desc": "Приложение на Compose с локальной базой и синхронизацией.",
+      "req": [
+        "Экраны на Jetpack Compose с навигацией",
+        "ViewModel + StateFlow, однонаправленный поток данных",
+        "Room для локальных данных, Retrofit для сети",
+        "Hilt для внедрения зависимостей",
+        "Unit-тесты ViewModel",
+        "Сборка APK/AAB и README со скриншотами"
+      ]
+    },
+    "jobs": "Junior Android Developer, Kotlin Developer"
+  },
+  "dotnet": {
+    "parent": "cs",
+    "title": "Путь .NET-разработчика",
+    "role": "Junior .NET Developer",
+    "about": "Бэкенд на C#: ASP.NET Core, Entity Framework Core и тесты xUnit.",
+    "caves": [
+      "aspnet",
+      "efcore",
+      "xunit"
+    ],
+    "project": {
+      "title": "Web API на ASP.NET Core",
+      "desc": "Сервис заказов или бронирования с авторизацией.",
+      "req": [
+        "Minimal API или контроллеры ASP.NET Core",
+        "EF Core с PostgreSQL, миграции и связи",
+        "Аутентификация JWT и политики",
+        "Валидация, ProblemDetails, логирование",
+        "xUnit-тесты сервисов и интеграционные тесты WebApplicationFactory",
+        "Docker и README"
+      ]
+    },
+    "jobs": "Junior .NET Developer, Junior C# Developer"
+  },
+  "cppdev": {
+    "parent": "cpp",
+    "title": "Путь системного C++-разработчика",
+    "role": "Junior C++ Developer",
+    "about": "Профессиональный C++: сборка CMake, многопоточность и тесты GoogleTest.",
+    "caves": [
+      "cmake",
+      "cppthreads",
+      "gtest"
+    ],
+    "project": {
+      "title": "Многопоточный сервис на C++",
+      "desc": "Например, индексатор файлов или обработчик очереди задач.",
+      "req": [
+        "Проект на CMake с библиотекой и исполняемым файлом",
+        "Пул потоков с std::jthread, mutex и condition_variable",
+        "Без утечек: RAII, умные указатели, санитайзеры",
+        "GoogleTest-тесты, запуск в CI",
+        "Замеры производительности",
+        "README с инструкцией сборки"
+      ]
+    },
+    "jobs": "Junior C++ Developer, Junior Systems Developer"
+  },
+  "goback": {
+    "parent": "go",
+    "title": "Путь Go-бэкендера",
+    "role": "Junior Go Developer",
+    "about": "Сервисы на Go: HTTP, работа с базой и gRPC для микросервисов.",
+    "caves": [
+      "gohttp",
+      "godb",
+      "grpc"
+    ],
+    "project": {
+      "title": "Микросервис на Go",
+      "desc": "Сервис сокращения ссылок или учёта задач.",
+      "req": [
+        "HTTP-сервер на net/http с middleware",
+        "PostgreSQL через pgx, миграции, транзакции",
+        "gRPC-сервис с protobuf",
+        "Контекст, таймауты, graceful shutdown",
+        "Табличные тесты",
+        "Dockerfile и README"
+      ]
+    },
+    "jobs": "Junior Go Developer, Junior Backend Developer (Go)"
+  },
+  "rustback": {
+    "parent": "rs",
+    "title": "Путь Rust-бэкендера",
+    "role": "Junior Rust Developer",
+    "about": "Rust на сервере: сериализация serde, асинхронность tokio и веб-фреймворк axum.",
+    "caves": [
+      "serde",
+      "tokio",
+      "axum"
+    ],
+    "project": {
+      "title": "Веб-сервис на axum",
+      "desc": "REST API с базой и фоновыми задачами.",
+      "req": [
+        "axum: маршруты, извлечение данных, обработка ошибок",
+        "serde для JSON",
+        "Асинхронность tokio, каналы, таймауты",
+        "База через sqlx",
+        "Тесты обработчиков",
+        "Docker-образ и README"
+      ]
+    },
+    "jobs": "Junior Rust Developer, Backend Developer (Rust)"
+  },
+  "ios": {
+    "parent": "swift",
+    "title": "Путь iOS-разработчика",
+    "role": "Junior iOS Developer",
+    "about": "Приложения для iPhone: SwiftUI, сеть и SwiftData, путь до App Store.",
+    "caves": [
+      "swiftui",
+      "iosnet",
+      "swiftdata"
+    ],
+    "project": {
+      "title": "iOS-приложение с сетью и офлайн-режимом",
+      "desc": "Например, каталог курсов или трекер расходов.",
+      "req": [
+        "Экраны на SwiftUI с навигацией",
+        "Сеть через async/await и Codable",
+        "SwiftData для офлайн-хранения",
+        "Обработка ошибок и состояний загрузки",
+        "Unit-тесты логики",
+        "TestFlight-сборка и README со скриншотами"
+      ]
+    },
+    "jobs": "Junior iOS Developer, Swift Developer"
+  },
+  "flutter": {
+    "parent": "dart",
+    "title": "Путь Flutter-разработчика",
+    "role": "Junior Flutter Developer",
+    "about": "Одно приложение для iOS и Android: виджеты, Riverpod, навигация, сеть и публикация.",
+    "caves": [
+      "flwidgets",
+      "riverpod",
+      "flnav"
+    ],
+    "project": {
+      "title": "Кроссплатформенное приложение на Flutter",
+      "desc": "Например, «Курсы валют» или трекер привычек.",
+      "req": [
+        "Адаптивные экраны на виджетах Material 3",
+        "Состояние через Riverpod",
+        "go_router с deep links",
+        "HTTP + JSON-модели, офлайн-кэш",
+        "Тесты провайдеров и виджетов",
+        "Сборка APK и README со скриншотами"
+      ]
+    },
+    "jobs": "Junior Flutter Developer, Mobile Developer (Flutter)"
+  },
+  "laravel": {
+    "parent": "php",
+    "title": "Путь Laravel-разработчика",
+    "role": "Junior PHP/Laravel Developer",
+    "about": "Веб-приложения и API на Laravel: маршруты и Blade, Eloquent, Sanctum, очереди и тесты.",
+    "caves": [
+      "laravel",
+      "eloquent",
+      "laravelapi"
+    ],
+    "project": {
+      "title": "Интернет-магазин или школа на Laravel",
+      "desc": "Сайт с админкой и API для мобильного клиента.",
+      "req": [
+        "Маршруты, контроллеры, Blade-шаблоны, Form Request",
+        "Eloquent: миграции, связи, без N+1",
+        "API Resources и Sanctum",
+        "Очереди для писем",
+        "Pest-тесты",
+        "Деплой и README"
+      ]
+    },
+    "jobs": "Junior PHP Developer, Junior Laravel Developer"
+  },
+  "rails": {
+    "parent": "rb",
+    "title": "Путь Rails-разработчика",
+    "role": "Junior Ruby on Rails Developer",
+    "about": "Ruby on Rails от структуры MVC до Hotwire, RSpec и деплоя с Kamal.",
+    "caves": [
+      "rails",
+      "activerecord",
+      "hotwire"
+    ],
+    "project": {
+      "title": "Приложение на Rails 8",
+      "desc": "Например, сервис бронирования или доска объявлений.",
+      "req": [
+        "MVC, REST-маршруты, strong parameters",
+        "ActiveRecord: валидации, связи, без N+1",
+        "Turbo и Stimulus для интерактивности",
+        "Фоновые задачи Active Job",
+        "RSpec + FactoryBot",
+        "Деплой Kamal или Render, README"
+      ]
+    },
+    "jobs": "Junior Ruby on Rails Developer, Junior Ruby Developer"
+  },
+  "analyst": {
+    "parent": "sql",
+    "title": "Путь аналитика данных",
+    "role": "Junior Data Analyst",
+    "about": "SQL для бизнеса: метрики, когорты и воронки, PostgreSQL, дашборды и A/B-тесты.",
+    "caves": [
+      "sqlanalytics",
+      "postgres",
+      "bi"
+    ],
+    "project": {
+      "title": "Аналитическое исследование с дашбордом",
+      "desc": "Возьмите открытые данные (магазин, сервис такси, data.gov.kz) и ответьте на бизнес-вопрос.",
+      "req": [
+        "Вопрос и определения метрик",
+        "SQL: когорты, воронка, оконные функции",
+        "Представление или витрина в PostgreSQL",
+        "Дашборд в Metabase, DataLens или Looker Studio",
+        "Разбор A/B-теста или гипотезы со статистикой",
+        "Отчёт: ответ, доказательства, рекомендации"
+      ]
+    },
+    "jobs": "Junior Data Analyst, Product Analyst, BI-аналитик"
+  },
+  "devops": {
+    "parent": "base",
+    "title": "Путь DevOps-инженера",
+    "role": "Junior DevOps Engineer",
+    "about": "Linux, Docker и CI/CD: от командной строки до автоматического деплоя и мониторинга.",
+    "caves": [
+      "linux",
+      "docker",
+      "cicd"
+    ],
+    "project": {
+      "title": "Конвейер доставки для своего проекта",
+      "desc": "Возьмите любой свой проект из курсов и автоматизируйте его путь до сервера.",
+      "req": [
+        "Сервер Linux: пользователь без root, SSH по ключам, файрвол",
+        "Dockerfile с многоэтапной сборкой и Compose с базой",
+        "GitHub Actions: тесты, сборка образа, публикация в реестр",
+        "Автоматический деплой и откат на прошлую версию",
+        "Мониторинг и алерт на ошибки",
+        "Terraform для сервера и README-схема"
+      ]
+    },
+    "jobs": "Junior DevOps Engineer, Junior SRE, Cloud Engineer (стажёр)"
+  }
+}

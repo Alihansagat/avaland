@@ -1,0 +1,339 @@
+@lang id=tokio name=Tokio и async land=Пещера Tokio color=#7c5cff cave=rs track=rustback step=2
+@about Асинхронный Rust: async/await, рантайм Tokio, задачи, каналы, таймауты и общая память между задачами.
+@why Вторая, потому что веб-фреймворк Axum работает поверх Tokio: каждый запрос — асинхронная задача. Без понимания async в Rust сервер не написать.
+
+@lesson async/await и рантайм
+`async fn` возвращает Future — описание работы, которое само ничего не делает. Его выполняет рантайм, и результат получают через `.await`: в этот момент задача уступает поток другим, пока ждёт сеть или таймер.
+Рантайм Tokio подключают макросом `#[tokio::main]` над `async fn main`. Он запускает пул потоков и выполняет тысячи задач на нескольких ядрах.
+Нельзя блокировать асинхронный код долгими синхронными операциями (`std::thread::sleep`, тяжёлые вычисления, синхронное чтение файла): весь поток рантайма встанет. Для них есть `tokio::time::sleep`, `tokio::fs` и `spawn_blocking`.
+```code
+use std::time::{Duration, Instant};
+
+async fn fetch_price(sku: &str) -> u64 {
+    tokio::time::sleep(Duration::from_millis(200)).await;    // имитация сети
+    if sku == "A1" { 1500 } else { 999 }
+}
+
+#[tokio::main]
+async fn main() {
+    let start = Instant::now();
+    let a = fetch_price("A1").await;                          // последовательно: ~200 мс
+    let b = fetch_price("B2").await;                          // ещё ~200 мс
+    println!("{} {}", a + b, start.elapsed() >= Duration::from_millis(400));
+
+    let start = Instant::now();
+    let (x, y) = tokio::join!(fetch_price("A1"), fetch_price("B2"));   // параллельно: ~200 мс
+    println!("{} {}", x + y, start.elapsed() < Duration::from_millis(350));
+}
+```
+! Future ленивые: без `.await` или запуска ничего не произойдёт
+! `tokio::join!` — дождаться нескольких Future одновременно
+! Никакого `std::thread::sleep` и тяжёлых вычислений внутри async — только `spawn_blocking`
+? mc Что произойдёт, если вызвать `fetch_price("A1")` без `.await`?
++ Ничего не выполнится: Future ленивый, компилятор предупредит о неиспользованном значении
+- Запрос выполнится в фоне
+- Программа упадёт
+- Выполнится синхронно
+= Future нужно дождаться или запустить как задачу.
+? mc Почему нельзя вызывать `std::thread::sleep` в async-функции на Tokio?
++ Он заблокирует поток рантайма, и другие задачи на нём остановятся
+- Он не компилируется
+- Он спит дольше
+- Он отменяет задачу
+= Используйте tokio::time::sleep.
+? fill Впишите макрос, который запускает рантайм Tokio для main.
+```code
+#[tokio::___]
+async fn main() {}
+```
+> main
+= #[tokio::main] создаёт рантайм и выполняет async main.
+? out Что выведет код?
+```code
+fn main() {
+    let per_call_ms = 200;
+    let calls = 3;
+    println!("{} {}", per_call_ms * calls, per_call_ms);
+}
+```
+> 600 200
+= Последовательные вызовы суммируют время, параллельные через join! — примерно время самого долгого.
+
+@lesson Задачи и каналы
+`tokio::spawn(async move { ... })` запускает независимую задачу и возвращает `JoinHandle`; `.await` на нём даёт результат. Задачи лёгкие — можно запускать десятки тысяч.
+Задачи общаются каналами: `mpsc` — много отправителей, один получатель (очередь работы), `oneshot` — один ответ, `broadcast` — сообщение всем подписчикам, `watch` — последнее значение настройки.
+`async move` забирает переменные во владение задачи: данные должны жить столько, сколько задача, поэтому в задачи передают владеемые значения или `Arc`.
+```code
+use tokio::sync::mpsc;
+
+#[tokio::main]
+async fn main() {
+    let (tx, mut rx) = mpsc::channel::<u32>(100);
+
+    for worker in 0..3u32 {
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            for i in 0..5 {
+                tx.send(worker * 10 + i).await.unwrap();
+            }
+        });
+    }
+    drop(tx);                          // иначе rx будет ждать вечно
+
+    let mut sum = 0;
+    let mut count = 0;
+    while let Some(v) = rx.recv().await {
+        sum += v;
+        count += 1;
+    }
+    println!("{count} {sum}");         // 15 180
+
+    let handle = tokio::spawn(async { 6 * 7 });
+    println!("{}", handle.await.unwrap());   // 42
+}
+```
+! `recv()` вернёт `None`, только когда все отправители удалены — не забудьте `drop(tx)`
+! В `tokio::spawn` передаётся `async move` с владеемыми данными
+! Ограниченный канал (`channel(100)`) даёт обратное давление: быстрый отправитель подождёт
+? mc Когда `rx.recv().await` вернёт None?
++ Когда все отправители (tx и его клоны) удалены и сообщения закончились
+- Через 100 сообщений
+- Сразу после первого сообщения
+- Никогда
+= Поэтому исходный tx нужно удалить после раздачи клонов.
+? out Что выведет код?
+```code
+fn main() {
+    let mut sum = 0;
+    let mut count = 0;
+    for worker in 0..3u32 {
+        for i in 0..5u32 {
+            sum += worker * 10 + i;
+            count += 1;
+        }
+    }
+    println!("{count} {sum}");
+}
+```
+> 15 180
+= Три воркера по пять сообщений; так считается сумма из примера урока.
+? fill Впишите функцию Tokio, которая запускает фоновую задачу.
+```code
+tokio::___(async move { work().await });
+```
+> spawn
+= spawn возвращает JoinHandle.
+? mc Какой канал выбрать для очереди задач от многих производителей к одному обработчику?
++ mpsc
+- oneshot
+- watch
+- Никакой
+= Multi-producer, single-consumer.
+
+@lesson Общее состояние: Arc и Mutex
+Данные, которые нужны нескольким задачам, оборачивают в `Arc` (счётчик ссылок для многопоточности). Изменяемые данные — в `Arc<Mutex<T>>` или `Arc<RwLock<T>>`.
+`std::sync::Mutex` подходит, если блокировка короткая и не держится через `.await`. Если нужно ждать внутри блокировки — `tokio::sync::Mutex`. Счётчики и флаги — атомики `AtomicU64`.
+Компилятор Rust не даст передать в другой поток то, что для этого не предназначено (`Send`/`Sync`) — гонки данных отлавливаются при компиляции.
+```code
+use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::collections::HashMap;
+
+#[derive(Default)]
+struct AppState {
+    visits: AtomicU64,
+    carts: Mutex<HashMap<u64, Vec<String>>>,
+}
+
+#[tokio::main]
+async fn main() {
+    let state = Arc::new(AppState::default());
+    let mut handles = vec![];
+    for user in 0..4u64 {
+        let st = Arc::clone(&state);
+        handles.push(tokio::spawn(async move {
+            st.visits.fetch_add(1, Ordering::Relaxed);
+            let mut carts = st.carts.lock().unwrap();          // короткая блокировка без .await внутри
+            carts.entry(user % 2).or_default().push(format!("item{user}"));
+        }));
+    }
+    for h in handles { h.await.unwrap(); }
+    let carts = state.carts.lock().unwrap();
+    println!("{} {}", state.visits.load(Ordering::Relaxed), carts[&0].len());   // 4 2
+}
+```
+! `Arc` — общий доступ, `Mutex`/`RwLock` — изменение
+! Не держите `std::sync::Mutex` через `.await`
+! Для счётчиков — атомики, без мьютекса
+? mc Зачем `Arc` при передаче состояния в несколько задач?
++ Он позволяет нескольким владельцам безопасно разделять одни данные между потоками
+- Он делает данные изменяемыми
+- Он ускоряет копирование
+- Он не нужен
+= Изменяемость добавляет Mutex или атомики.
+? out Что выведет код?
+```code
+use std::sync::{Arc, Mutex};
+use std::thread;
+
+fn main() {
+    let total = Arc::new(Mutex::new(0));
+    let mut hs = vec![];
+    for i in 1..=4 {
+        let t = Arc::clone(&total);
+        hs.push(thread::spawn(move || { *t.lock().unwrap() += i; }));
+    }
+    for h in hs { h.join().unwrap(); }
+    println!("{}", *total.lock().unwrap());
+}
+```
+> 10
+= 1 + 2 + 3 + 4 под мьютексом.
+? fill Впишите тип для общего изменяемого счётчика без мьютекса.
+```code
+let hits = Arc::new(___::new(0));
+```
+> AtomicU64
+> AtomicUsize
+= Атомарные типы из std::sync::atomic.
+? mc Когда нужен tokio::sync::Mutex вместо std::sync::Mutex?
++ Когда блокировку нужно удерживать через .await
+- Всегда
+- Никогда
+- Для чтения
+= Иначе std::sync::Mutex может заблокировать поток рантайма.
+
+@lesson Таймауты, select и корректное завершение
+Любой сетевой вызов оборачивают таймаутом: `tokio::time::timeout(Duration::from_secs(2), fut).await` вернёт ошибку, если не успели.
+`tokio::select!` ждёт несколько Future и выполняет ветку того, что завершился первым, — так реализуют отмену, гонку запросов, остановку по сигналу.
+Для плавной остановки слушают `tokio::signal::ctrl_c()` или SIGTERM и рассылают сигнал задачам через `CancellationToken` или `watch`-канал: задачи доделывают текущую работу и выходят.
+```code
+use std::time::Duration;
+use tokio::time::{sleep, timeout};
+
+async fn slow() -> &'static str { sleep(Duration::from_millis(500)).await; "медленный" }
+async fn fast() -> &'static str { sleep(Duration::from_millis(50)).await; "быстрый" }
+
+#[tokio::main]
+async fn main() {
+    match timeout(Duration::from_millis(100), slow()).await {
+        Ok(v) => println!("{v}"),
+        Err(_) => println!("таймаут"),                 // таймаут
+    }
+
+    let winner = tokio::select! {
+        v = slow() => v,
+        v = fast() => v,
+    };
+    println!("{winner}");                              // быстрый
+
+    let (stop_tx, mut stop_rx) = tokio::sync::watch::channel(false);
+    let worker = tokio::spawn(async move {
+        let mut ticks = 0;
+        loop {
+            tokio::select! {
+                _ = sleep(Duration::from_millis(10)) => ticks += 1,
+                _ = stop_rx.changed() => break,
+            }
+        }
+        ticks
+    });
+    sleep(Duration::from_millis(55)).await;
+    stop_tx.send(true).unwrap();
+    println!("{}", worker.await.unwrap() >= 3);       // true
+}
+```
+! Таймаут на каждый внешний вызов
+! `select!` отменяет проигравшие ветки — их Future просто удаляются
+! Плавная остановка: сигнал всем задачам и ожидание их завершения
+? mc Что делает `tokio::select!`?
++ Ждёт несколько Future и продолжает с тем, что завершился первым, отменяя остальные
+- Выполняет все ветки по очереди
+- Выбирает случайную ветку
+- Делает SQL-запрос
+= Основа для таймаутов, отмены и гонок.
+? out Что выведет код?
+```code
+fn main() {
+    let times = [("slow", 500), ("fast", 50), ("mid", 200)];
+    let winner = times.iter().min_by_key(|(_, t)| *t).unwrap().0;
+    let within = times.iter().filter(|(_, t)| *t <= 100).count();
+    println!("{winner} {within}");
+}
+```
+> fast 1
+= select! выдаст самый быстрый; в таймаут 100 мс укладывается только один вызов.
+? fill Впишите функцию Tokio, ограничивающую время ожидания Future.
+```code
+tokio::time::___(Duration::from_secs(2), call()).await
+```
+> timeout
+= timeout возвращает Err(Elapsed), если не успели.
+? mc Зачем сервису обрабатывать SIGTERM?
++ Чтобы доделать текущие запросы и корректно закрыть соединения перед остановкой
+- Чтобы игнорировать остановку
+- Для логирования
+- Это не нужно
+= Иначе деплой обрывает запросы пользователей.
+
+@exam
+? mc Что такое Future в Rust?
++ Значение, описывающее асинхронную работу, которая выполнится при опросе рантаймом
+- Поток операционной системы
+- Готовый результат
+- Канал
+= Future ленивы и требуют рантайм.
+? fill Впишите макрос Tokio, ожидающий несколько Future одновременно.
+```code
+let (a, b) = tokio::___!(load_a(), load_b());
+```
+> join
+= join! ждёт все Future параллельно.
+? out Что выведет код?
+```code
+use std::sync::Arc;
+
+fn main() {
+    let a = Arc::new(String::from("state"));
+    let b = Arc::clone(&a);
+    println!("{} {}", Arc::strong_count(&a), b.len());
+}
+```
+> 2 5
+= Два владельца одной строки длиной 5.
+? mc Какой канал подходит для одного ответа от задачи?
++ oneshot
+- mpsc
+- broadcast
+- watch
+= oneshot передаёт ровно одно значение.
+? mc Почему в tokio::spawn нужен `async move`?
++ Задача может жить дольше текущей функции, поэтому должна владеть своими данными
+- Чтобы ускорить задачу
+- Это синтаксический сахар без смысла
+- Чтобы задача была синхронной
+= Ссылки на локальные переменные не проживут достаточно долго.
+? out Что выведет код?
+```code
+fn main() {
+    let results: Vec<Result<u32, &str>> = vec![Ok(1), Err("timeout"), Ok(3)];
+    let ok: u32 = results.iter().filter_map(|r| r.as_ref().ok()).sum();
+    let errors = results.iter().filter(|r| r.is_err()).count();
+    println!("{ok} {errors}");
+}
+```
+> 4 1
+= Сумма успешных результатов и число ошибок.
+? mc Что сделать с тяжёлым вычислением в async-обработчике?
++ Вынести в tokio::task::spawn_blocking или отдельный пул
+- Выполнить прямо в async-функции
+- Добавить std::thread::sleep
+- Ничего
+= Иначе поток рантайма заблокируется.
+? fill Впишите тип-обёртку для общего изменяемого состояния между потоками.
+```code
+let state = Arc::new(___::new(HashMap::new()));
+```
+> Mutex
+> RwLock
+= Mutex или RwLock внутри Arc.

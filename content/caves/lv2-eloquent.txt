@@ -1,0 +1,312 @@
+@lang id=eloquent name=Eloquent ORM land=Пещера Eloquent color=#f05340 cave=php track=laravel step=2
+@about Работа с базой в Laravel: миграции, модели Eloquent, связи, запросы без N+1 и фабрики.
+@why Вторая, потому что почти каждая страница Laravel читает и пишет базу. После маршрутов и контроллеров нужно научиться хранить данные — на этом построены API и тесты третьей пещеры.
+
+@lesson Миграции
+Миграции описывают структуру базы кодом и хранятся в Git: `php artisan make:migration create_courses_table`. В методе `up` создают таблицу, в `down` — откатывают.
+Схема: `$table->id()`, `string('title')`, `integer('price')`, `foreignId('user_id')->constrained()->cascadeOnDelete()`, `timestamps()` (created_at и updated_at), `unique`, `index`.
+`php artisan migrate` применяет новые миграции, `migrate:rollback` откатывает последнюю пачку. Уже применённую на сервере миграцию не меняют — пишут новую.
+```code
+<?php
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration {
+    public function up(): void
+    {
+        Schema::create('courses', function (Blueprint $table) {
+            $table->id();
+            $table->foreignId('user_id')->constrained()->cascadeOnDelete();   // автор
+            $table->string('title', 120)->unique();
+            $table->unsignedInteger('price')->default(0);
+            $table->enum('level', ['beginner', 'middle', 'advanced'])->index();
+            $table->timestamp('published_at')->nullable();
+            $table->timestamps();
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::dropIfExists('courses');
+    }
+};
+```
+! Применённые миграции не редактируют — создают новые
+! Внешние ключи — `foreignId()->constrained()`
+! Столбцы для частых фильтров — с индексом
+? mc Что делает `php artisan migrate`?
++ Применяет к базе все ещё не выполненные миграции
+- Удаляет базу
+- Создаёт модель
+- Переносит данные между серверами
+= Laravel хранит список выполненных миграций в таблице migrations.
+? mc Миграция уже выполнена на продакшене, а нужен новый столбец. Что делать?
++ Создать новую миграцию с добавлением столбца
+- Изменить старую миграцию
+- Удалить таблицу вручную
+- Добавить столбец только локально
+= История миграций должна быть одинаковой везде.
+? fill Впишите метод схемы, создающий created_at и updated_at.
+```code
+$table->___();
+```
+> timestamps
+= Eloquent заполняет их автоматически.
+? out Что выведет код?
+```code
+$applied = ['2026_01_create_users', '2026_02_create_courses'];
+$all = ['2026_01_create_users', '2026_02_create_courses', '2026_03_add_level'];
+echo implode(' ', array_diff($all, $applied));
+```
+> 2026_03_add_level
+= migrate выполнит только новые миграции.
+
+@lesson Модели и запросы
+Модель Eloquent — класс, связанный с таблицей: `Course` → `courses`. Создание — `php artisan make:model Course -mf` (с миграцией и фабрикой).
+Запросы строят цепочкой: `Course::where('level', 'beginner')->orderByDesc('price')->paginate(20)`. `find($id)`, `findOrFail($id)` (сам вернёт 404), `first()`, `count()`, `exists()`.
+Массовое заполнение защищено: разрешённые поля перечисляют в `$fillable`. `$casts` превращает столбцы в нужные типы (`'published_at' => 'datetime'`, `'meta' => 'array'`).
+```code
+<?php
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Model;
+
+class Course extends Model
+{
+    use HasFactory;
+
+    protected $fillable = ['title', 'price', 'level', 'published_at'];
+    protected $casts = ['published_at' => 'datetime', 'price' => 'integer'];
+
+    public function scopePublished(Builder $q): Builder      // Course::published()
+    {
+        return $q->whereNotNull('published_at');
+    }
+}
+
+// Course::create(['title' => 'Eloquent', 'price' => 9000, 'level' => 'middle']);
+// $cheap = Course::published()->where('price', '<', 10000)->orderBy('price')->get();
+// $course = Course::findOrFail($id);
+// $course->update(['price' => 7000]);
+// Course::where('level', 'advanced')->count();
+```
+! `findOrFail` вместо ручной проверки на null
+! `$fillable` защищает от записи лишних полей
+! Повторяющиеся условия — в scope-методы
+? mc Что делает `Course::findOrFail(7)`, если курса нет?
++ Бросает исключение, и Laravel отвечает 404
+- Возвращает null
+- Создаёт курс
+- Возвращает пустой массив
+= Удобно в контроллерах show и update.
+? out Что выведет код?
+```code
+$fillable = ['title', 'price'];
+$input = ['title' => 'SQL', 'price' => 3000, 'is_admin' => 1];
+echo json_encode(array_intersect_key($input, array_flip($fillable)));
+```
+> {"title":"SQL","price":3000}
+= Поля вне $fillable при create() отбрасываются.
+? fill Впишите метод запроса для постраничного вывода по 20 записей.
+```code
+$courses = Course::latest()->___(20);
+```
+> paginate
+= paginate возвращает страницу и ссылки на соседние.
+? mc Как назвать метод модели для запроса `Course::published()`?
++ scopePublished
+- published
+- getPublished
+- whereScope
+= Префикс scope Laravel убирает при вызове.
+
+@lesson Связи и проблема N+1
+Связи описывают методами: `hasMany` (у автора много курсов), `belongsTo` (курс принадлежит автору), `belongsToMany` (студенты и курсы через таблицу `course_user`), `hasOne`.
+Обращение `$course->author` загружает связь отдельным запросом. В цикле по 50 курсам это 51 запрос — проблема N+1. Решение — жадная загрузка: `Course::with('author')->get()` — два запроса.
+`withCount('lessons')` добавляет количество без загрузки самих уроков; `Model::preventLazyLoading()` в разработке сообщает о забытом `with`.
+```code
+<?php
+class User extends Model
+{
+    public function courses() { return $this->hasMany(Course::class); }
+    public function enrolled() { return $this->belongsToMany(Course::class)->withTimestamps(); }
+}
+
+class Course extends Model
+{
+    public function author() { return $this->belongsTo(User::class, 'user_id'); }
+    public function lessons() { return $this->hasMany(Lesson::class); }
+}
+
+// плохо: 1 + N запросов
+// foreach (Course::all() as $c) echo $c->author->name;
+
+// хорошо: 2 запроса + количество уроков одним подзапросом
+$courses = Course::with('author')->withCount('lessons')->get();
+// foreach ($courses as $c) echo "$c->title — {$c->author->name}, уроков: $c->lessons_count";
+
+// запись в связь многие-ко-многим
+// $user->enrolled()->attach($courseId);
+// $user->enrolled()->syncWithoutDetaching([$courseId]);
+```
+! В списках всегда `with()` для используемых связей
+! `withCount` вместо `count()` в цикле
+! `preventLazyLoading` в разработке ловит N+1
+? mc Сколько запросов сделает цикл по 50 курсам с `$c->author->name` без with?
++ 51
+- 1
+- 2
+- 50
+= Один за курсами и по одному на автора каждого курса.
+? out Что выведет код?
+```code
+$queries = 0;
+$courses = range(1, 50); $queries++;
+$authors = array_unique(array_map(fn($c) => $c % 5, $courses)); $queries++;
+echo $queries . ' ' . count($authors);
+```
+> 2 5
+= with() загружает всех авторов одним запросом.
+? fill Впишите тип связи «курс принадлежит автору».
+```code
+public function author() { return $this->___(User::class, 'user_id'); }
+```
+> belongsTo
+= Внешний ключ лежит в таблице курсов.
+? mc Какая связь у студентов и курсов?
++ belongsToMany через промежуточную таблицу
+- hasOne
+- belongsTo
+- Связь не нужна
+= Студент на многих курсах, у курса много студентов.
+
+@lesson Фабрики, сидеры и транзакции
+Фабрики генерируют тестовые записи: `Course::factory()->count(10)->create()`. В `definition()` описывают поля через Faker. Состояния — `->state(['level' => 'advanced'])` или методы `published()`.
+Сидеры наполняют базу для разработки: `php artisan db:seed`, а `migrate:fresh --seed` пересоздаёт базу с нуля.
+Несколько связанных изменений делают в транзакции: `DB::transaction(function () {...})` — при исключении всё откатится. Для денег и остатков нужна блокировка `lockForUpdate()`.
+```code
+<?php
+namespace Database\Factories;
+
+use Illuminate\Database\Eloquent\Factories\Factory;
+
+class CourseFactory extends Factory
+{
+    public function definition(): array
+    {
+        return [
+            'user_id' => \App\Models\User::factory(),
+            'title' => fake()->unique()->sentence(3),
+            'price' => fake()->numberBetween(0, 50) * 1000,
+            'level' => fake()->randomElement(['beginner', 'middle', 'advanced']),
+        ];
+    }
+
+    public function published(): static
+    {
+        return $this->state(fn () => ['published_at' => now()]);
+    }
+}
+
+// Course::factory()->count(5)->published()->create();
+
+// покупка курса
+// DB::transaction(function () use ($user, $course) {
+//     $wallet = $user->wallet()->lockForUpdate()->first();
+//     abort_if($wallet->balance < $course->price, 422, 'Недостаточно средств');
+//     $wallet->decrement('balance', $course->price);
+//     $user->enrolled()->attach($course->id);
+// });
+```
+! Фабрики — для тестов и сидеров, не для продакшена
+! Связанные изменения — в `DB::transaction`
+! Деньги и остатки — с блокировкой строки
+? mc Что делает `php artisan migrate:fresh --seed`?
++ Удаляет все таблицы, заново выполняет миграции и запускает сидеры
+- Обновляет Laravel
+- Делает бэкап
+- Только запускает сидеры
+= Только для локальной базы.
+? out Что выведет код?
+```code
+$balance = 5000;
+$price = 7000;
+try {
+    if ($balance < $price) throw new Exception('Недостаточно средств');
+    $balance -= $price;
+} catch (Exception $e) {
+    echo $e->getMessage() . ' ' . $balance;
+}
+```
+> Недостаточно средств 5000
+= Исключение в транзакции откатывает изменения.
+? fill Впишите метод Laravel для выполнения кода в транзакции.
+```code
+DB::___(function () { /* ... */ });
+```
+> transaction
+= При исключении изменения откатываются.
+? mc Зачем `lockForUpdate()` при списании денег?
++ Чтобы два параллельных запроса не списали деньги с одного баланса одновременно
+- Ускоряет запрос
+- Шифрует баланс
+- Удаляет строку
+= Блокировка строки до конца транзакции.
+
+@exam
+? mc Что описывает миграция?
++ Изменение структуры базы данных кодом
+- Шаблон страницы
+- Маршрут
+- Перевод текста
+= Миграции хранятся в Git вместе с кодом.
+? fill Впишите метод для жадной загрузки связи.
+```code
+$courses = Course::___('author')->get();
+```
+> with
+= with решает проблему N+1.
+? out Что выведет код?
+```code
+$courses = [['t' => 'A', 'p' => 0], ['t' => 'B', 'p' => 9000], ['t' => 'C', 'p' => 4000]];
+$paid = array_filter($courses, fn($c) => $c['p'] > 0);
+usort($paid, fn($a, $b) => $a['p'] <=> $b['p']);
+echo implode(',', array_column($paid, 't'));
+```
+> C,B
+= Как where('price', '>', 0)->orderBy('price').
+? mc Как получить количество уроков у каждого курса без загрузки уроков?
++ Course::withCount('lessons')
+- count() внутри цикла
+- Загрузить все уроки и посчитать
+- Нельзя
+= Поле lessons_count вычисляется подзапросом.
+? mc Зачем свойство $fillable?
++ Разрешает массовое заполнение только перечисленных полей
+- Делает поля обязательными
+- Создаёт столбцы
+- Шифрует поля
+= Защита от mass assignment.
+? out Что выведет код?
+```code
+$levels = ['beginner', 'middle', 'advanced', 'middle'];
+$counts = array_count_values($levels);
+echo $counts['middle'] . ' ' . count($counts);
+```
+> 2 3
+= Как GROUP BY level с COUNT.
+? fill Впишите метод модели, который вернёт 404 вместо null.
+```code
+$course = Course::___($id);
+```
+> findOrFail
+= ModelNotFoundException превращается в 404.
+? mc Где описать генерацию тестовых курсов?
++ В фабрике CourseFactory
+- В миграции
+- В контроллере
+- В .env
+= Фабрики используют в тестах и сидерах.

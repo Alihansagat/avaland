@@ -1,0 +1,327 @@
+@lang id=riverpod name=Riverpod land=Пещера Riverpod color=#00b8d4 cave=dart track=flutter step=2
+@about Управление состоянием во Flutter: провайдеры, асинхронные данные, Notifier, зависимости и тесты.
+@why Вторая, потому что setState хватает только внутри одного виджета. Реальное приложение делит данные между экранами — этим и занимается Riverpod, а навигация и сеть из третьей пещеры пользуются его провайдерами.
+
+@lesson Провайдеры и ProviderScope
+Riverpod хранит состояние вне виджетов в провайдерах — глобальных объявлениях, которые создают и кэшируют значения. Приложение оборачивают в `ProviderScope`.
+Виджет читает провайдер через `ref`: наследник `ConsumerWidget` получает `WidgetRef ref` в `build`. `ref.watch(provider)` подписывается и перестроит виджет при изменении, `ref.read` — разово прочитать (в обработчиках нажатий).
+Провайдеры могут зависеть друг от друга: внутри одного `ref.watch(другой)` — и пересчитываются автоматически.
+```code
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+final priceProvider = Provider<int>((ref) => 1500);
+final qtyProvider = StateProvider<int>((ref) => 1);
+final totalProvider = Provider<int>((ref) => ref.watch(priceProvider) * ref.watch(qtyProvider));
+
+void main() => runApp(const ProviderScope(child: MaterialApp(home: CartScreen())));
+
+class CartScreen extends ConsumerWidget {
+  const CartScreen({super.key});
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final total = ref.watch(totalProvider);           // перестроится при смене qty
+    return Scaffold(
+      body: Center(child: Text('Итого: $total ₸')),
+      floatingActionButton: FloatingActionButton(
+        onPressed: () => ref.read(qtyProvider.notifier).state++,     // read — в обработчике
+        child: const Icon(Icons.add),
+      ),
+    );
+  }
+}
+```
+! `ref.watch` — в `build`, `ref.read` — в обработчиках событий
+! Приложение должно быть обёрнуто в `ProviderScope`
+! Производные значения — отдельными провайдерами, которые watch-ат другие
+? mc Чем ref.watch отличается от ref.read?
++ watch подписывается и перестраивает виджет при изменении, read читает значение один раз
+- Ничем
+- read подписывается
+- watch только для тестов
+= В build — watch, в onPressed — read.
+? mc Что нужно обернуть вокруг приложения для работы Riverpod?
++ ProviderScope
+- MaterialApp
+- Scaffold
+- StatefulWidget
+= ProviderScope хранит состояния всех провайдеров.
+? out Что выведет код?
+```code
+void main() {
+  final price = 1500;
+  var qty = 1;
+  int total() => price * qty;
+  qty++; qty++;
+  print(total());
+}
+```
+> 4500
+= Производное значение пересчитывается от текущего qty.
+? fill Впишите базовый класс виджета, получающего ref в build.
+```code
+class Profile extends ___ { ... }
+```
+> ConsumerWidget
+= ConsumerWidget даёт WidgetRef.
+
+@lesson Асинхронные данные: FutureProvider и AsyncValue
+Данные из сети описывают `FutureProvider`: провайдер вызывает асинхронную функцию и хранит результат. Виджет получает `AsyncValue<T>` и обрабатывает три состояния через `when`: `data`, `loading`, `error`.
+Провайдеры кэшируют результат: второй экран с тем же провайдером не сделает лишний запрос. `ref.invalidate(provider)` перезапустит загрузку (например, по «потянуть, чтобы обновить»).
+Модификатор `family` передаёт параметр: `FutureProvider.family<Course, int>((ref, id) => api.course(id))`; `autoDispose` очищает состояние, когда экран закрыт.
+```code
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+class CoursesApi {
+  Future<List<String>> courses() async {
+    await Future.delayed(const Duration(milliseconds: 300));
+    return ['Dart', 'Flutter', 'Riverpod'];
+  }
+}
+
+final apiProvider = Provider((ref) => CoursesApi());
+final coursesProvider = FutureProvider.autoDispose<List<String>>((ref) => ref.watch(apiProvider).courses());
+
+class CoursesScreen extends ConsumerWidget {
+  const CoursesScreen({super.key});
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final courses = ref.watch(coursesProvider);
+    return RefreshIndicator(
+      onRefresh: () => ref.refresh(coursesProvider.future),
+      child: courses.when(
+        data: (list) => ListView(children: [for (final c in list) ListTile(title: Text(c))]),
+        loading: () => const Center(child: CircularProgressIndicator()),
+        error: (e, _) => Center(child: Text('Ошибка: $e')),
+      ),
+    );
+  }
+}
+```
+! `AsyncValue.when` заставляет обработать загрузку и ошибку
+! `autoDispose` — для данных конкретного экрана
+! `family` — для провайдеров с параметром (id курса)
+? mc Какие три состояния у AsyncValue?
++ data, loading, error
+- start, middle, end
+- ok, fail, retry
+- true, false, null
+= when обрабатывает каждое.
+? mc Что делает `ref.invalidate(coursesProvider)`?
++ Сбрасывает состояние провайдера, и он загрузит данные заново при следующем чтении
+- Удаляет провайдер навсегда
+- Отменяет приложение
+- Сохраняет кэш на диск
+= Удобно для обновления по запросу пользователя.
+? fill Впишите модификатор провайдера с параметром.
+```code
+final courseProvider = FutureProvider.___<Course, int>((ref, id) => api.course(id));
+```
+> family
+= family создаёт отдельное состояние для каждого параметра.
+? out Что выведет код?
+```code
+Future<List<String>> load() async => ['Dart', 'Flutter'];
+void main() async {
+  final list = await load();
+  print(list.map((e) => e.length).toList());
+}
+```
+> [4, 7]
+= Длины названий.
+
+@lesson Notifier: логика и изменения
+Состояние, которое меняют действия пользователя, описывают классом `Notifier<T>`: метод `build` задаёт начальное значение, остальные методы меняют `state`. Асинхронный вариант — `AsyncNotifier`.
+Состояние неизменяемо: вместо изменения списка присваивают новый `state = [...state, item]`. Для сложных объектов пишут метод `copyWith`.
+Виджет вызывает методы через `ref.read(cartProvider.notifier).add(item)`, а показывает `ref.watch(cartProvider)`. Вся логика — в Notifier, виджет только рисует.
+```code
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+class CartItem {
+  const CartItem(this.title, this.price, [this.qty = 1]);
+  final String title;
+  final int price;
+  final int qty;
+  CartItem copyWith({int? qty}) => CartItem(title, price, qty ?? this.qty);
+}
+
+class CartNotifier extends Notifier<List<CartItem>> {
+  @override
+  List<CartItem> build() => const [];
+
+  void add(String title, int price) {
+    final i = state.indexWhere((e) => e.title == title);
+    if (i == -1) {
+      state = [...state, CartItem(title, price)];
+    } else {
+      state = [for (final (j, e) in state.indexed) j == i ? e.copyWith(qty: e.qty + 1) : e];
+    }
+  }
+
+  int get total => state.fold(0, (sum, e) => sum + e.price * e.qty);
+}
+
+final cartProvider = NotifierProvider<CartNotifier, List<CartItem>>(CartNotifier.new);
+
+void main() {
+  final container = ProviderContainer();
+  final cart = container.read(cartProvider.notifier);
+  cart..add('Курс Dart', 5000)..add('Курс Dart', 5000)..add('Курс SQL', 3000);
+  print('${container.read(cartProvider).length} ${cart.total}');    // 2 13000
+}
+```
+! Логика — в Notifier, виджет только вызывает методы и рисует
+! Новое состояние — новым объектом, без изменения старого
+! `ProviderContainer` позволяет использовать провайдеры без Flutter — например, в тестах
+? mc Как правильно добавить элемент в состояние-список Notifier?
++ state = [...state, item]
+- state.add(item)
+- state[state.length] = item
+- setState(() => state.add(item))
+= Нужен новый список, иначе подписчики не узнают об изменении.
+? out Что выведет код?
+```code
+class Item { const Item(this.t, this.p, [this.q = 1]); final String t; final int p; final int q; }
+void main() {
+  final cart = [const Item('a', 100, 2), const Item('b', 50)];
+  print(cart.fold<int>(0, (s, e) => s + e.p * e.q));
+}
+```
+> 250
+= 100 × 2 + 50 × 1.
+? fill Впишите базовый класс Riverpod для изменяемого состояния с методами.
+```code
+class CounterNotifier extends ___<int> { @override int build() => 0; }
+```
+> Notifier
+= Notifier хранит state и методы его изменения.
+? mc Где должна быть логика добавления товара в корзину?
++ В Notifier корзины
+- В onPressed кнопки
+- В build виджета
+- В pubspec.yaml
+= Так логику легко тестировать без интерфейса.
+
+@lesson Тесты провайдеров
+Провайдеры тестируют без интерфейса через `ProviderContainer`: создают контейнер, читают значения и вызывают методы Notifier. После теста контейнер освобождают `container.dispose()`.
+Зависимости подменяют через `overrides`: `ProviderContainer(overrides: [apiProvider.overrideWithValue(FakeApi())])` — сетевой слой заменён фальшивкой.
+Виджеты тестируют `testWidgets`: `tester.pumpWidget(ProviderScope(overrides: [...], child: ...))`, поиск `find.text`, нажатия `tester.tap`, затем `tester.pump()`.
+```code
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_test/flutter_test.dart';
+
+class FakeApi extends CoursesApi {
+  @override
+  Future<List<String>> courses() async => ['Тестовый курс'];
+}
+
+void main() {
+  test('корзина считает итог', () {
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+    final cart = container.read(cartProvider.notifier);
+    cart.add('A', 1000);
+    cart.add('A', 1000);
+    expect(cart.total, 2000);
+    expect(container.read(cartProvider).single.qty, 2);
+  });
+
+  test('курсы из фальшивого API', () async {
+    final container = ProviderContainer(overrides: [apiProvider.overrideWithValue(FakeApi())]);
+    addTearDown(container.dispose);
+    final list = await container.read(coursesProvider.future);
+    expect(list, ['Тестовый курс']);
+  });
+}
+```
+! `ProviderContainer` — тесты логики без виджетов
+! `overrides` подменяют сеть и базу фальшивками
+! `addTearDown(container.dispose)` — освобождение после теста
+? mc Как подменить API фальшивкой в тесте Riverpod?
++ Передать overrides: [apiProvider.overrideWithValue(FakeApi())] в ProviderContainer или ProviderScope
+- Изменить код API
+- Выключить интернет
+- Нельзя
+= Подмена провайдеров — главный плюс Riverpod для тестов.
+? out Что выведет код?
+```code
+void main() {
+  final calls = <String>[];
+  Future<List<String>> fakeCourses() async { calls.add('fake'); return ['T']; }
+  fakeCourses().then((v) => print('${v.single} ${calls.length}'));
+}
+```
+> T 1
+= Фальшивая функция вызвана один раз и вернула тестовые данные.
+? fill Впишите функцию flutter_test для теста логики.
+```code
+___('считает итог', () { expect(1 + 1, 2); });
+```
+> test
+= testWidgets — для виджетов, test — для логики.
+? mc Что делает `tester.pump()` в тесте виджета?
++ Перестраивает дерево виджетов после изменения состояния
+- Запускает приложение на телефоне
+- Удаляет виджет
+- Ждёт ответ сервера
+= После tap нужно pump, чтобы увидеть результат.
+
+@exam
+? mc Зачем Riverpod, если есть setState?
++ setState работает внутри одного виджета, а Riverpod делит состояние между экранами и упрощает тесты
+- setState устарел
+- Riverpod быстрее рисует
+- Это одно и то же
+= Для глобального состояния нужен менеджер.
+? fill Впишите провайдер для асинхронной загрузки данных.
+```code
+final userProvider = ___<User>((ref) => api.me());
+```
+> FutureProvider
+= FutureProvider хранит AsyncValue.
+? out Что выведет код?
+```code
+void main() {
+  var state = <String>['a'];
+  final old = state;
+  state = [...state, 'b'];
+  print('${old.length} ${state.length} ${identical(old, state)}');
+}
+```
+> 1 2 false
+= Новый список вместо изменения старого.
+? mc Где вызывать ref.read?
++ В обработчиках событий, например onPressed
+- В build для отображения данных
+- В main
+- Нигде
+= В build нужен watch, чтобы реагировать на изменения.
+? mc Что даёт autoDispose?
++ Освобождает состояние провайдера, когда его больше никто не слушает
+- Удаляет данные с сервера
+- Отключает кэш навсегда
+- Перезапускает приложение
+= Экономия памяти для данных экранов.
+? out Что выведет код?
+```code
+void main() {
+  final list = ['a', 'b', 'a', 'c'];
+  print(list.indexWhere((e) => e == 'a'));
+  print(list.indexWhere((e) => e == 'z'));
+}
+```
+> 0 -1
+= Первый индекс найденного элемента или -1.
+? mc Как показать загрузку, данные и ошибку из FutureProvider?
++ value.when(data: ..., loading: ..., error: ...)
+- Тремя отдельными провайдерами
+- try/catch в build
+- Через Navigator
+= AsyncValue.when покрывает все случаи.
+? fill Впишите класс для использования провайдеров без Flutter.
+```code
+final container = ___();
+```
+> ProviderContainer
+= ProviderContainer — контейнер состояния для тестов и Dart-кода.

@@ -4,7 +4,7 @@
 
 const LANGS = window.AVA_CONTENT;
 const DEV = !!window.AVA_DEV;
-const VERSION = "1.1.0";
+const VERSION = "1.2.0";
 const APP_STORE_ID = "";            // впишите id приложения из App Store Connect, чтобы появилась кнопка «Оценить»
 const DAY = 864e5, HOLD = 14, WARN = 10, KEY = "avaland-v2";
 const LESSON_PASS = 3, EXAM_RATE = 0.8, EXAM_COOLDOWN_MIN = 30;
@@ -15,6 +15,16 @@ const P = (Cap && Cap.Plugins) || {};
 const $ = (s, r = document) => r.querySelector(s);
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const IDX = Object.fromEntries(LANGS.map((L, i) => [L.id, i]));
+/* Страны-языки идут первыми, за ними — пещеры-библиотеки (L.cave = язык-родитель, L.track, L.step) */
+const TRACKS = window.AVA_TRACKS || {};
+const NCOUNTRY = LANGS.some(L => L.cave) ? LANGS.findIndex(L => L.cave) : LANGS.length;
+const CN = LANGS.slice(0, NCOUNTRY);
+const CAVES = LANGS.slice(NCOUNTRY);
+const hlLang = L => L.cave || L.id;
+const playLang = L => { const x = L.cave || L.id; return x === "base" ? (L.cave ? null : "py") : x; };
+const playName = L => { const x = playLang(L); return x === "py" ? "Python" : x ? LANGS[IDX[x]].name : ""; };
+const TIDS = Object.keys(TRACKS);
+const tracksOf = l => TIDS.filter(t => TRACKS[t].parent === LANGS[l].id);
 
 /* ---------------- state ---------------- */
 const fresh = () => ({
@@ -26,7 +36,7 @@ const fresh = () => ({
   ach: {},
   settings: { goal: 50, remind: true, hour: 19, sound: true, haptics: true },
   offset: 0, sel: null, tab: "map", last: null, reviewAsked: false,
-  practice: {}, drafts: {}, lang: "py", leet: null
+  practice: {}, drafts: {}, lang: "py", leet: null, tracks: {}
 });
 let S = fresh();
 
@@ -64,6 +74,7 @@ const tk = (l, i) => LANGS[l].id + "-" + i;
 function status(l, i) {
   const r = S.topics[tk(l, i)];
   if (r) { const age = (now() - r.last) / DAY; return age > HOLD ? "siege" : age > WARN ? "warn" : "held"; }
+  if (LANGS[l].cave && !caveOpen(l)) return "fog";
   if (i === 0 || S.topics[tk(l, i - 1)]) return "open";
   return "fog";
 }
@@ -73,20 +84,35 @@ const heldCount = l => LANGS[l].lessons.filter((_, i) => isHeld(status(l, i))).l
 const anyRec = l => LANGS[l].lessons.some((_, i) => S.topics[tk(l, i)]);
 const examReady = l => heldCount(l) === LANGS[l].lessons.length;
 const passed = l => !!(S.exams[LANGS[l].id] && S.exams[LANGS[l].id].passed);
+/* пещеры: путь открывается после экзамена страны, каждая следующая пещера — после экзамена предыдущей */
+const trackOpen = tid => DEV || passed(IDX[TRACKS[tid].parent]);
+const trackCaves = tid => TRACKS[tid].caves.map(c => IDX[c]).filter(x => x != null);
+const trackDoneN = tid => trackCaves(tid).filter(passed).length;
+const trackDone = tid => trackCaves(tid).length > 0 && trackDoneN(tid) === trackCaves(tid).length;
+function caveOpen(l) {
+  const L = LANGS[l]; if (!L.cave) return true;
+  const T = TRACKS[L.track]; if (!T) return false;
+  if (!trackOpen(L.track)) return false;
+  const k = T.caves.indexOf(L.id);
+  return DEV || k <= 0 || passed(IDX[T.caves[k - 1]]);
+}
+function caveState(l) { return passed(l) ? "done" : !caveOpen(l) ? "locked" : anyRec(l) ? "progress" : "open"; }
 
 function stats() {
   let held = 0, total = 0, mastered = 0, next = null; const siege = [];
   LANGS.forEach((L, l) => {
-    let ok = 0;
+    let ok = 0; const country = !L.cave;
     L.lessons.forEach((_, i) => {
-      total++; const s = status(l, i);
-      if (isHeld(s)) { held++; ok++; const d = daysLeft(l, i); next = next === null ? d : Math.min(next, d); }
+      const s = status(l, i);
+      if (country) total++;
+      if (isHeld(s)) { if (country) { held++; ok++; } const d = daysLeft(l, i); next = next === null ? d : Math.min(next, d); }
       if (s === "siege" && !siege.includes(l)) siege.push(l);
     });
-    if (ok === L.lessons.length) mastered++;
+    if (country && ok === L.lessons.length) mastered++;
   });
-  const certs = LANGS.filter((_, l) => passed(l)).length;
-  return { pct: Math.round(held / total * 100), held, total, mastered, siege, next, certs };
+  const certs = CN.filter((_, l) => passed(l)).length;
+  const caves = CAVES.filter((_, k) => passed(NCOUNTRY + k)).length, tracks = TIDS.filter(trackDone).length;
+  return { pct: Math.round(held / total * 100), held, total, mastered, siege, next, certs, caves, tracks };
 }
 function addXP(n) { S.xp += n; const k = dayKey(now()); S.days[k] = (S.days[k] || 0) + n; }
 function streak() { let n = 0, t = now(); if (!S.days[dayKey(t)]) t -= DAY; while (S.days[dayKey(t)]) { n++; t -= DAY; } return n; }
@@ -95,8 +121,8 @@ const todayXP = () => S.days[dayKey(now())] || 0;
 /* ---------------- achievements ---------------- */
 const ACH = [
   ["first", "Первая провинция", "Пройдите первый урок", s => Object.keys(S.topics).length >= 1],
-  ["capitals", "Три столицы", "Захватите первый урок в трёх странах", s => LANGS.filter((_, l) => S.topics[tk(l, 0)]).length >= 3],
-  ["poly", "Полиглот", "Изучайте пять разных языков", s => LANGS.filter((_, l) => anyRec(l)).length >= 5],
+  ["capitals", "Три столицы", "Захватите первый урок в трёх странах", s => CN.filter((_, l) => S.topics[tk(l, 0)]).length >= 3],
+  ["poly", "Полиглот", "Изучайте пять разных языков", s => CN.filter((_, l) => anyRec(l)).length >= 5],
   ["lang", "Покоритель", "Захватите все провинции одной страны", s => s.mastered >= 1],
   ["cert1", "Дипломированный", "Сдайте первый финальный экзамен", s => s.certs >= 1],
   ["cert3", "Магистр", "Получите три сертификата", s => s.certs >= 3],
@@ -114,7 +140,11 @@ const ACH = [
   ["prac1", "Первая задача", "Решите задачу на Полигоне", () => practiceStats().solved >= 1],
   ["prac10", "Десять задач", "Решите 10 задач на Полигоне", () => practiceStats().solved >= 10],
   ["prac-hard", "Без страха", "Решите сложную задачу", () => practiceStats().by.hard[0] >= 1],
-  ["leet", "Связь с LeetCode", "Подключите профиль LeetCode", () => !!(S.leet && S.leet.user)]
+  ["leet", "Связь с LeetCode", "Подключите профиль LeetCode", () => !!(S.leet && S.leet.user)],
+  ["cave1", "Спелеолог", "Пройдите первую пещеру-библиотеку", s => s.caves >= 1],
+  ["cave5", "Глубже и глубже", "Пройдите пять пещер", s => s.caves >= 5],
+  ["track1", "Готов к работе", "Пройдите весь путь профессии и получите сертификат", s => s.tracks >= 1],
+  ["track3", "Мастер на все руки", "Пройдите три пути профессий", s => s.tracks >= 3]
 ];
 function checkAch() {
   const s = stats(), st = streak(), got = [];
@@ -269,7 +299,7 @@ function mapSVG(kind, stFn, sel = -1, interactive = true) {
     });
   });
   const tall = kind === "tall";
-  LANGS.forEach((L, l) => {
+  CN.forEach((L, l) => {
     const [x, y] = Wd.centers[l].px;
     const known = L.lessons.some((_, i) => stFn(l, i) !== "fog");
     if (isHeld(stFn(l, 0))) labels += `<g class="crown" transform="translate(${x - 1},${y - (tall ? 46 : 40)})"><line x1="0" y1="0" x2="0" y2="18" stroke="#e8ecef" stroke-width="1.8"/><path d="M0 0 L13 4 L0 8 Z" fill="${L.color}" stroke="#0a1b29" stroke-width=".8"/></g>`;
@@ -281,6 +311,13 @@ function mapSVG(kind, stFn, sel = -1, interactive = true) {
       labels += `<text class="lbl${known ? "" : " dim"}" x="${x}" y="${y + 5}" font-size="18" stroke-width="5">${esc(L.land.toUpperCase())}</text>`;
       labels += `<text class="lbl sub" x="${x}" y="${y + 23}" font-size="13" stroke-width="4">${esc(L.name)} · ${heldCount(l)}/${L.lessons.length}</text>`;
     }
+    if (interactive) tracksOf(l).forEach((tid, k) => {     // вход в пещеры острова
+      const open = trackOpen(tid), done = trackDone(tid), n = trackCaves(tid).length;
+      const cx = x + (tall ? 74 : 62) + k * 30, cy = y + (tall ? -30 : -22), sc = tall ? 1.25 : 1;
+      labels += `<g class="cavemk${open ? "" : " locked"}${done ? " done" : ""}" data-t="${tid}" transform="translate(${cx},${cy}) scale(${sc})" role="button" aria-label="Пещеры: ${esc(TRACKS[tid].title)}"><title>${esc(TRACKS[tid].title)} — ${open ? `${trackDoneN(tid)} из ${n} пещер` : `откроется после экзамена ${esc(L.name)}`}</title>
+        <path d="M-13 9 L-13 1 Q-13 -12 0 -12 Q13 -12 13 1 L13 9 Z" class="cv-rock"/><path d="M-7 9 L-7 3 Q-7 -5 0 -5 Q7 -5 7 3 L7 9 Z" class="cv-hole"/>
+        ${open ? `<text class="cv-n" x="0" y="23">${trackDoneN(tid)}/${n}</text>` : `<path class="cv-lock" d="M-3 4 h6 v5 h-6 z M-2 4 v-2 a2 2 0 0 1 4 0 v2"/>`}</g>`;
+    });
   });
   return { vb: `0 0 ${Wd.W.toFixed(0)} ${Wd.H.toFixed(0)}`, html: `<defs>
     <pattern id="hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="6" stroke="#ffffff" stroke-opacity=".07" stroke-width="2"/></pattern>
@@ -315,7 +352,7 @@ const L_warn = l => LANGS[l].lessons.some((_, i) => ["warn", "siege"].includes(s
 function nextTarget() {
   const order = [];
   if (S.last != null && IDX[S.last] != null) order.push(IDX[S.last]);
-  LANGS.forEach((_, l) => { if (!order.includes(l)) order.push(l); });
+  CN.forEach((_, l) => { if (!order.includes(l)) order.push(l); });
   for (const l of order) {
     if (!anyRec(l) && l !== order[0]) continue;
     const i = LANGS[l].lessons.findIndex((_, k) => status(l, k) === "open");
@@ -328,13 +365,13 @@ function nextTarget() {
 function contCard() {
   const t = nextTarget(); if (!t) return "";
   const L = LANGS[t.l];
-  if (t.kind === "exam") return `<div class="cont">${hexChip(L.color)}<div><small>${esc(L.name)} · все провинции захвачены</small><b>Финальный экзамен</b></div><button class="btn pri big" data-act="examIntro" data-l="${t.l}">К экзамену</button></div>`;
+  if (t.kind === "exam") return `<div class="cont">${hexChip(L.color)}<div><small>${esc(L.name)} · ${L.cave ? "все залы пещеры пройдены" : "все провинции захвачены"}</small><b>${L.cave ? "Экзамен пещеры" : "Финальный экзамен"}</b></div><button class="btn pri big" data-act="examIntro" data-l="${t.l}">К экзамену</button></div>`;
   const started = anyRec(t.l);
   return `<div class="cont">${hexChip(L.color)}<div><small>${started ? "Продолжить" : "Начать"} · ${esc(L.name)} · урок ${t.i + 1} из ${L.lessons.length}</small><b>${esc(L.lessons[t.i].t)}</b></div><button class="btn pri big" data-act="learn" data-l="${t.l}" data-i="${t.i}">Учить</button></div>`;
 }
 function atlasHTML() {
   return `<div class="ph"><div><h2>Атлас</h2><p>Страна — язык, провинция — урок. Пройдите урок и испытание, чтобы снять туман.</p></div></div>
-  <div class="list">${LANGS.map((L, l) => `<button class="lrow" data-act="country" data-l="${l}">${hexChip(L.color)}<span><b>${esc(L.land)}${passed(l) ? ' <span class="pill gold">сертификат</span>' : ""}</b><small>${esc(L.name)} · ${heldCount(l)} из ${L.lessons.length}</small></span><span class="segs">${L.lessons.map((_, i) => { const c = segColor(l, i); return `<i${c ? ` style="background:${c}"` : ""}></i>`; }).join("")}</span></button>`).join("")}</div>`;
+  <div class="list">${CN.map((L, l) => `<button class="lrow" data-act="country" data-l="${l}">${hexChip(L.color)}<span><b>${esc(L.land)}${passed(l) ? ' <span class="pill gold">сертификат</span>' : ""}</b><small>${esc(L.name)} · ${heldCount(l)} из ${L.lessons.length}</small></span><span class="segs">${L.lessons.map((_, i) => { const c = segColor(l, i); return `<i${c ? ` style="background:${c}"` : ""}></i>`; }).join("")}</span></button>`).join("")}</div>`;
 }
 function segColor(l, i) { const s = status(l, i); return s === "held" ? LANGS[l].color : s === "warn" ? "var(--warn)" : s === "siege" ? "var(--danger)" : s === "open" ? "var(--gold)" : ""; }
 const STXT = {
@@ -344,7 +381,49 @@ const STXT = {
   open: () => "Доступно для захвата",
   fog: () => "Туман войны"
 };
+function tracksBox(l) {
+  const ts = tracksOf(l); if (!ts.length) return "";
+  return `<div class="box caves"><h3>${caveIcon()} Пещеры-библиотеки</h3><p>После экзамена ${esc(LANGS[l].name)} открываются пещеры — библиотеки и фреймворки по дорожной карте профессии. Пройдите все и получите сертификат готовности к работе.</p>
+    ${ts.map(tid => { const T = TRACKS[tid], n = trackCaves(tid).length, d = trackDoneN(tid), open = trackOpen(tid);
+      return `<div class="trk"><div><b>${esc(T.title)}</b><small>${open ? (trackDone(tid) ? `Путь пройден · ${esc(T.role)}` : `${d} из ${n} пещер · цель: ${esc(T.role)}`) : `Откроется после экзамена ${esc(LANGS[l].name)}`}</small>
+        <span class="segs">${trackCaves(tid).map(c => `<i${passed(c) ? ` style="background:${LANGS[c].color}"` : caveOpen(c) ? ' style="background:var(--gold)"' : ""}></i>`).join("")}</span></div>
+        <button class="btn ${open && !trackDone(tid) ? "pri" : ""}" data-act="track" data-t="${tid}">Дорожная карта</button></div>`; }).join("")}</div>`;
+}
+const caveIcon = (sz = 16) => `<svg width="${sz}" height="${sz}" viewBox="-14 -13 28 23" aria-hidden="true" style="vertical-align:-2px"><path d="M-13 9 L-13 1 Q-13 -12 0 -12 Q13 -12 13 1 L13 9 Z" fill="#8a7a5c"/><path d="M-7 9 L-7 3 Q-7 -5 0 -5 Q7 -5 7 3 L7 9 Z" fill="#0a1b29"/></svg>`;
+function caveHTML(l, inSheet) {
+  const L = LANGS[l], T = TRACKS[L.track] || { caves: [], title: "" }, held = heldCount(l), n = L.lessons.length, ex = S.exams[L.id], par = IDX[L.cave];
+  const k = T.caves.indexOf(L.id), open = caveOpen(l);
+  const rows = L.lessons.map((t, i) => {
+    const s = status(l, i);
+    const btn = s === "open" ? `<button class="btn pri" data-act="learn" data-l="${l}" data-i="${i}">Учить</button>` :
+      s === "siege" ? `<button class="btn red" data-act="review" data-l="${l}">Отбить</button>` :
+      s === "fog" ? `<button class="btn" disabled aria-label="Закрыто">Закрыто</button>` :
+      `<button class="btn" data-act="learn" data-l="${l}" data-i="${i}">Открыть</button>`;
+    const nStyle = s === "held" ? `style="background:${L.color}"` : s === "warn" ? `style="background:var(--warn)"` : "";
+    return `<div class="trow ${s}"><span class="n" ${nStyle}>${i + 1}</span><div><b>${esc(t.t)}</b><small>${s === "fog" && !open ? "Пещера ещё закрыта" : STXT[s](l, i)}</small></div>${btn}</div>`;
+  }).join("");
+  const prev = k > 0 ? LANGS[IDX[T.caves[k - 1]]] : null;
+  const lockTxt = !trackOpen(L.track) ? `Пещера откроется, когда вы сдадите финальный экзамен ${esc(LANGS[par].name)}.` : prev ? `Пещера откроется после экзамена пещеры «${esc(prev.name)}».` : "";
+  let exam;
+  if (ex && ex.passed) exam = `<div class="box exam"><h3>${I.star.replace("<svg", '<svg width="16" height="16" style="color:var(--gold)"')} Пещера пройдена: ${ex.score} из ${ex.total}</h3><p>${k + 1 < T.caves.length ? `Открыта следующая пещера: «${esc(LANGS[IDX[T.caves[k + 1]]].name)}».` : "Это была последняя пещера пути."}</p><div class="row"><button class="btn" data-act="cert" data-l="${l}">Сертификат пещеры</button><button class="btn pri" data-act="track" data-t="${L.track}">Дорожная карта</button></div></div>`;
+  else {
+    const cool = ex && ex.failAt && now() - ex.failAt < EXAM_COOLDOWN_MIN * 6e4 ? Math.ceil((EXAM_COOLDOWN_MIN * 6e4 - (now() - ex.failAt)) / 6e4) : 0;
+    exam = `<div class="box exam"><h3>Экзамен пещеры</h3><p>${L.exam.length} заданий по всей пещере. Нужно ${Math.ceil(L.exam.length * EXAM_RATE)} правильных ответов — тогда откроется ${k + 1 < T.caves.length ? "следующая пещера" : "сертификат пути"}.</p>
+      <div class="row"><button class="btn pri" data-act="examIntro" data-l="${l}" ${examReady(l) && !cool ? "" : "disabled"}>${cool ? `Пересдача через ${cool} мин` : "Сдать экзамен"}</button>${examReady(l) ? "" : `<span class="note">Сначала пройдите все ${n} залов</span>`}</div></div>`;
+  }
+  return `<button class="back" data-act="${inSheet ? "track" : "country"}" ${inSheet ? `data-t="${L.track}"` : `data-l="${par}"`}>← ${inSheet ? "Дорожная карта" : esc(LANGS[par].land)}</button>
+    <div class="ph">${caveIcon(30)}<div><h2>${esc(L.land)}</h2><p>${esc(T.title)} · шаг ${k + 1} из ${T.caves.length} · ${held} из ${n} залов</p></div></div>
+    <div class="bar" role="progressbar" aria-valuenow="${held}" aria-valuemin="0" aria-valuemax="${n}"><i style="width:${held / n * 100}%;background:${L.color}"></i></div>
+    <p class="about">${L.about}</p>
+    ${open ? "" : `<div class="box lockbox"><p>🔒 ${lockTxt}</p></div>`}
+    <div class="box why"><h3>Почему эта пещера на шаге ${k + 1}</h3><p>${L.why || ""}</p></div>
+    <div class="list">${rows}</div>
+    ${playLang(L) ? `<div class="box"><h3>Компилятор ${esc(playName(L))}</h3><p>Примеры, которые не требуют фреймворка, можно запускать и менять.</p><div class="row"><button class="btn" data-act="play" data-lang="${playLang(L)}">Открыть компилятор</button></div></div>` : ""}
+    <div class="box"><h3>Повторение</h3><p>Залы пещеры тоже нужно защищать раз в ${HOLD} дней.</p><div class="row"><button class="btn" data-act="review" data-l="${l}" ${anyRec(l) ? "" : "disabled"}>Повторить пещеру</button></div></div>
+    ${exam}`;
+}
 function countryHTML(l, inSheet = false) {
+  if (LANGS[l].cave) return caveHTML(l, inSheet);
   const L = LANGS[l], held = heldCount(l), n = L.lessons.length, ex = S.exams[L.id];
   const siege = L.lessons.some((_, i) => status(l, i) === "siege");
   const rows = L.lessons.map((t, i) => {
@@ -368,9 +447,10 @@ function countryHTML(l, inSheet = false) {
     <div class="bar" role="progressbar" aria-valuenow="${held}" aria-valuemin="0" aria-valuemax="${n}"><i style="width:${held / n * 100}%;background:${L.color}"></i></div>
     <p class="about">${L.about}</p>
     <div class="list">${rows}</div>
-    <div class="box"><h3>Компилятор ${esc(L.id === "base" ? "Python" : L.name)}</h3><p>Пишите и запускайте код прямо здесь: редактор с подсветкой, ввод данных и вывод программы.</p><div class="row"><button class="btn" data-act="play" data-lang="${L.id === "base" ? "py" : L.id}">Открыть компилятор</button></div></div>
+    <div class="box"><h3>Компилятор ${esc(playName(L))}</h3><p>Пишите и запускайте код прямо здесь: редактор с подсветкой, ввод данных и вывод программы.</p><div class="row"><button class="btn" data-act="play" data-lang="${playLang(L)}">Открыть компилятор</button></div></div>
     <div class="box"><h3>Повторение</h3><p>Раз в ${HOLD} дней отвечайте на вопросы по захваченным урокам — иначе провинции попадут в осаду и перестанут считаться.</p><div class="row"><button class="btn ${siege ? "red" : ""}" data-act="review" data-l="${l}" ${anyRec(l) ? "" : "disabled"}>Повторить язык</button></div></div>
     ${exam}
+    ${tracksBox(l)}
     <div class="box"><h3>Проект для портфолио ${S.projects[L.id] ? '<span class="pill ok">готов</span>' : ""}</h3><p><b style="color:var(--ink)">${esc(L.project.title)}.</b> ${L.project.desc}</p><div class="row"><button class="btn" data-act="project" data-l="${l}">Требования к проекту</button></div></div>`;
 }
 
@@ -415,14 +495,18 @@ function viewAwards() {
     const lv = x === 0 ? "" : x < S.settings.goal / 2 ? "l1" : x < S.settings.goal ? "l2" : "l3";
     cal += `<i class="${lv}${k === 0 ? " today" : ""}" title="${key}: ${x} XP"></i>`;
   }
-  const certs = LANGS.map((L, l) => passed(l) ? `<div class="cert">${hexChip(L.color)}<div><b>${esc(L.name)}</b><br><small class="muted">№ ${esc(S.exams[L.id].cid)} · ${S.exams[L.id].score}/${S.exams[L.id].total}</small></div><button class="btn" data-act="cert" data-l="${l}">Открыть</button></div>` : "").join("");
+  const certs = CN.map((L, l) => passed(l) ? `<div class="cert">${hexChip(L.color)}<div><b>${esc(L.name)}</b><br><small class="muted">№ ${esc(S.exams[L.id].cid)} · ${S.exams[L.id].score}/${S.exams[L.id].total}</small></div><button class="btn" data-act="cert" data-l="${l}">Открыть</button></div>` : "").join("");
   return `<div class="grid2">
     <section class="card stack"><div class="row" style="justify-content:space-between"><div><div class="eyebrow">Серия</div><h2 class="h-sec">${st} ${plural(st, "день", "дня", "дней")} подряд</h2></div>${I.fire.replace('width="22" height="22"', 'width="40" height="40"')}</div>
       <div class="cal" aria-label="Активность за 4 недели">${cal}</div>
       <p class="note">Всего ${S.xp} XP · цель дня ${S.settings.goal} XP</p></section>
-    <section class="card stack"><div><div class="eyebrow">${s.certs} из ${LANGS.length}</div><h2 class="h-sec">Сертификаты</h2></div>
+    <section class="card stack"><div><div class="eyebrow">${s.certs} из ${CN.length}</div><h2 class="h-sec">Сертификаты</h2></div>
       ${certs ? `<div class="list">${certs}</div>` : '<p class="muted" style="margin:0">Захватите все провинции страны и сдайте финальный экзамен — сертификат появится здесь.</p>'}
       <button class="btn" data-act="share">Поделиться картой империи</button></section>
+    <section class="card stack" style="grid-column:1/-1"><div><div class="eyebrow">${s.tracks} из ${TIDS.length} путей · ${s.caves} из ${CAVES.length} пещер</div><h2 class="h-sec">Пути профессий</h2></div>
+      <p class="muted" style="margin:0">После экзамена страны открываются пещеры-библиотеки. Пройдите все пещеры пути — получите сертификат готовности к позиции джуна.</p>
+      <div class="list">${TIDS.map(tid => { const T = TRACKS[tid], P0 = LANGS[IDX[T.parent]], n = trackCaves(tid).length, d = trackDoneN(tid);
+        return `<div class="cert">${hexChip(P0.color)}<div><b>${esc(T.role)}</b><br><small class="muted">${S.tracks[tid] ? `№ ${esc(S.tracks[tid].cid)}` : trackOpen(tid) ? `${d} из ${n} пещер` : `после экзамена ${esc(P0.name)}`}</small></div><button class="btn ${S.tracks[tid] ? "pri" : ""}" data-act="${S.tracks[tid] ? "trackCert" : "track"}" data-t="${tid}">${S.tracks[tid] ? "Сертификат" : "Путь"}</button></div>`; }).join("")}</div></section>
     <section class="card stack" style="grid-column:1/-1"><div><div class="eyebrow">${Object.keys(S.ach).length} из ${ACH.length}</div><h2 class="h-sec">Достижения</h2></div>
       <div class="ach">${ACH.map(([id, t, d]) => `<div class="${S.ach[id] ? "on" : ""}"><span class="medal">${I.star}</span><b>${t}</b><small>${d}</small></div>`).join("")}</div></section>
   </div>`;
@@ -444,7 +528,7 @@ function viewProfile() {
       ${NATIVE ? `<label class="switch"><span>Вибрация</span><input type="checkbox" id="st-hap" ${st.haptics ? "checked" : ""}></label>` : ""}
       ${NATIVE ? "" : `<p class="note">${esc(pushHint())}</p>`}</section>
     <section class="card stack"><div><div class="eyebrow">О приложении</div><h2 class="h-sec">AVALAND ${VERSION}</h2></div>
-      <p class="muted" style="margin:0">${LANGS.length} стран, ${LANGS.reduce((a, L) => a + L.lessons.length, 0)} уроков, ${LANGS.reduce((a, L) => a + L.lessons.reduce((b, x) => b + x.q.length, 0) + L.exam.length, 0)} заданий, ${(window.AVA_PRACTICE || []).length} задач и компилятор на 14 языках. Уроки работают без интернета. ${me ? "Прогресс сохраняется в облаке и на этом устройстве." : "Без входа прогресс хранится только на этом устройстве — сохраните резервную копию или войдите в аккаунт."}</p>
+      <p class="muted" style="margin:0">${CN.length} стран, ${CAVES.length} пещер-библиотек в ${TIDS.length} путях профессий, ${LANGS.reduce((a, L) => a + L.lessons.length, 0)} уроков, ${LANGS.reduce((a, L) => a + L.lessons.reduce((b, x) => b + x.q.length, 0) + L.exam.length, 0)} заданий, ${(window.AVA_PRACTICE || []).length} задач и компилятор на 14 языках. Уроки работают без интернета. ${me ? "Прогресс сохраняется в облаке и на этом устройстве." : "Без входа прогресс хранится только на этом устройстве — сохраните резервную копию или войдите в аккаунт."}</p>
       <div class="row"><button class="btn" data-act="backup">Скачать резервную копию</button><button class="btn" data-act="restore">Восстановить из файла</button><input type="file" id="bk-file" accept="application/json,.json" hidden></div>
       <div class="row">${APP_STORE_ID ? `<a class="btn" href="itms-apps://apps.apple.com/app/id${APP_STORE_ID}?action=write-review">Оценить приложение</a>` : ""}<button class="btn" data-act="privacy">Политика конфиденциальности</button></div>
       <div id="rst"><button class="btn red" data-act="reset">Сбросить прогресс</button></div></section>
@@ -521,11 +605,11 @@ const codeBlock = (code, lang, copy = true) => `<div class="codewrap"><pre class
 function openLesson(l, i) {
   const L = LANGS[l], t = L.lessons[i], s = status(l, i);
   S.last = L.id; save();
-  shell(L.color, `${esc(L.name)} · урок ${i + 1} из ${L.lessons.length}`, esc(t.t),
+  shell(L.color, `${esc(L.name)} · ${L.cave ? "зал" : "урок"} ${i + 1} из ${L.lessons.length}`, esc(t.t),
     `${t.body.map(p => `<p class="txt">${p}</p>`).join("")}
-     ${codeBlock(t.code, L.id)}
+     ${codeBlock(t.code, hlLang(L))}
      ${t.run === false
-       ? `<div class="row"><button class="btn ghost" data-act="play" data-lang="${L.id === "base" ? "py" : L.id}">Открыть компилятор ${esc(L.id === "base" ? "Python" : L.name)}</button><span class="note">Этот пример — фрагмент реального проекта (фреймворк, сеть или несколько файлов), отдельно он не запускается.</span></div>`
+       ? `<div class="row">${playLang(L) ? `<button class="btn ghost" data-act="play" data-lang="${playLang(L)}">Открыть компилятор ${esc(playName(L))}</button>` : ""}<span class="note">${L.cave === "base" ? "Эти команды и конфиги запускают в терминале, Docker или CI — повторите их на своём компьютере или сервере." : "Этот пример — фрагмент реального проекта (фреймворк, сеть или несколько файлов), отдельно он не запускается."}</span></div>`
        : `<div class="row"><button class="btn" data-act="playLesson" data-l="${l}" data-i="${i}">▶ Запустить и изменить этот код</button></div>`}
      ${t.tips.length ? `<p class="tips-h">Запомните</p><ul class="tips">${t.tips.map(x => `<li>${x}</li>`).join("")}</ul>` : ""}
      <div class="acts"><button class="btn pri big" data-act="startLesson" data-l="${l}" data-i="${i}">${s === "open" ? `К испытанию · ${t.q.length} вопроса` : "Пройти испытание снова"}</button></div>`);
@@ -566,7 +650,7 @@ function startQuiz(cfg) {
 const KIND = { mc: "Выберите ответ", out: "Что выведет код? Впишите вывод", fill: "Впишите пропущенное" };
 function quizTitle() {
   const L = LANGS[Q.l];
-  return Q.mode === "lesson" ? esc(L.lessons[Q.i].t) : Q.mode === "exam" ? "Финальный экзамен" : Q.mode === "warmup" ? "Разминка дня" : `Удержать: ${esc(L.land)}`;
+  return Q.mode === "lesson" ? esc(L.lessons[Q.i].t) : Q.mode === "exam" ? (L.cave ? "Экзамен пещеры" : "Финальный экзамен") : Q.mode === "warmup" ? "Разминка дня" : `Удержать: ${esc(L.land)}`;
 }
 function showQ() {
   const x = Q.qs[Q.k], L = LANGS[x.l];
@@ -578,7 +662,7 @@ function showQ() {
     `<div class="qhead"><span>Вопрос ${Q.k + 1} из ${Q.qs.length}${Q.mode !== "lesson" && Q.mode !== "exam" ? " · " + esc(L.lessons[x.i].t) : ""}</span><span class="pips">${pips}</span></div>
      <div class="kind">${KIND[x.q.t]}</div>
      <p class="q">${x.q.q}</p>
-     ${x.q.c ? codeBlock(x.q.c, L.id, false) : ""}
+     ${x.q.c ? codeBlock(x.q.c, hlLang(L), false) : ""}
      ${body}<div id="after"></div>`);
   openOv(x.q.t === "mc" ? ".opt" : "#ans");
 }
@@ -647,16 +731,31 @@ function finish() {
     need = Math.ceil(total * EXAM_RATE); win = right >= need;
     const id = L.id;
     if (win) {
-      const date = now();
+      const date = now(), was = passed(Q.l);
       S.exams[id] = { passed: true, date, score: right, total, cid: certId(id, S.profile.name, date) };
       Q.xp += 100;
       msg = "Экзамен сдан. Сертификат выписан на ваше имя.";
       extraBtn = `<button class="btn pri big" data-act="cert" data-l="${Q.l}">Открыть сертификат</button>`;
+      if (L.cave) {
+        const T = TRACKS[L.track], k = T.caves.indexOf(L.id), nx = IDX[T.caves[k + 1]];
+        if (nx != null) {
+          msg = `Пещера пройдена! Открыта следующая: «${esc(LANGS[nx].name)}».`;
+          extraBtn = `<button class="btn pri big" data-act="country" data-l="${nx}">В следующую пещеру</button>`;
+        } else if (trackDone(L.track)) {
+          if (!S.tracks[L.track]) S.tracks[L.track] = { date, cid: certId("T" + L.track, S.profile.name, date) };
+          Q.xp += was ? 0 : 300;
+          msg = `«${esc(T.title)}» пройден! Вы готовы откликаться на позицию ${esc(T.role)}. Сертификат выписан на ваше имя.`;
+          extraBtn = `<button class="btn pri big" data-act="trackCert" data-t="${L.track}">Сертификат пути</button>`;
+        }
+      } else if (tracksOf(Q.l).length) {
+        msg += ` Открылись пещеры: ${tracksOf(Q.l).map(t => "«" + esc(TRACKS[t].title) + "»").join(", ")}.`;
+        extraBtn += `<button class="btn big" data-act="track" data-t="${tracksOf(Q.l)[0]}">Дорожная карта</button>`;
+      }
     } else {
       S.exams[id] = { passed: false, failAt: now(), score: right, total };
       msg = `Нужно ${need} из ${total}. Пересдача через ${EXAM_COOLDOWN_MIN} минут — повторите уроки с ошибками.`;
     }
-    title = win ? "Экзамен сдан" : "Экзамен не сдан"; eyebrow = `${esc(L.name)} · финальный экзамен`;
+    title = win ? (L.cave && S.tracks[L.track] && !TRACKS[L.track].caves[TRACKS[L.track].caves.indexOf(L.id) + 1] ? "Путь пройден" : "Экзамен сдан") : "Экзамен не сдан"; eyebrow = `${esc(L.name)} · ${L.cave ? "экзамен пещеры" : "финальный экзамен"}`;
   }
   addXP(Q.xp);
   const st1 = streak();
@@ -723,9 +822,7 @@ function wrapText(ctx, text, x, y, maxW, lh) {
   if (line) ctx.fillText(line, x, yy);
   return yy;
 }
-async function certCanvas(l) {
-  await fontsReady();
-  const L = LANGS[l], ex = S.exams[L.id];
+function certBase(color) {
   const c = document.createElement("canvas"); c.width = 1600; c.height = 1131;
   const g = c.getContext("2d");
   const grd = g.createLinearGradient(0, 0, 1600, 1131); grd.addColorStop(0, "#0e2335"); grd.addColorStop(1, "#0a1b29");
@@ -737,24 +834,91 @@ async function certCanvas(l) {
   g.lineWidth = 1.5; g.strokeRect(66, 66, 1468, 999);
   g.textAlign = "center"; g.fillStyle = "#e2b04a";
   g.font = '34px "Russo One", sans-serif'; g.fillText("AVALAND", 800, 160);
-  hexPath(g, 800, 238, 46); g.fillStyle = L.color; g.fill();
+  hexPath(g, 800, 238, 46); g.fillStyle = color; g.fill();
+  return [c, g];
+}
+function certFooter(g, date, cid) {
+  g.textAlign = "left"; g.fillStyle = "#93a6b5"; g.font = '24px "Golos Text", sans-serif';
+  g.fillText("Дата выдачи", 160, 950); g.fillText("Номер сертификата", 1040, 950);
+  g.fillStyle = "#e8ecef"; g.font = '600 30px "Golos Text", sans-serif';
+  g.fillText(new Date(date).toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" }), 160, 992);
+  g.fillText(cid, 1040, 992);
+  g.textAlign = "center"; g.fillStyle = "#6b8193"; g.font = '19px "Golos Text", sans-serif';
+  g.fillText("Сертификат подтверждает прохождение учебного курса в приложении AVALAND", 800, 1040);
+}
+async function certCanvas(l) {
+  await fontsReady();
+  const L = LANGS[l], ex = S.exams[L.id];
+  const [c, g] = certBase(L.color);
   g.fillStyle = "#e8ecef"; g.font = '78px "Russo One", sans-serif'; g.fillText("СЕРТИФИКАТ", 800, 380);
   g.fillStyle = "#93a6b5"; g.font = '30px "Golos Text", sans-serif'; g.fillText("подтверждает, что", 800, 450);
   g.fillStyle = "#e2b04a"; g.font = '64px "Russo One", sans-serif'; g.fillText(S.profile.name || "Студент AVALAND", 800, 545);
   g.fillStyle = "#e8ecef"; g.font = '34px "Golos Text", sans-serif';
-  g.fillText(`успешно завершил(а) курс «${L.name}»`, 800, 625);
+  g.fillText(L.cave ? `успешно прошёл(ла) пещеру «${L.name}» пути «${(TRACKS[L.track] || {}).title || ""}»` : `успешно завершил(а) курс «${L.name}»`, 800, 625);
   g.fillStyle = "#93a6b5"; g.font = '27px "Golos Text", sans-serif';
-  g.fillText(`${L.lessons.length} уроков, финальный экзамен: ${ex.score} из ${ex.total} (${Math.round(ex.score / ex.total * 100)}%)`, 800, 680);
+  g.fillText(`${L.lessons.length} уроков, ${L.cave ? "экзамен" : "финальный экзамен"}: ${ex.score} из ${ex.total} (${Math.round(ex.score / ex.total * 100)}%)`, 800, 680);
   g.font = '23px "Golos Text", sans-serif';
   wrapText(g, "Темы: " + L.lessons.map(x => x.t).join(" · "), 800, 740, 1250, 34);
-  g.textAlign = "left"; g.fillStyle = "#93a6b5"; g.font = '24px "Golos Text", sans-serif';
-  g.fillText("Дата выдачи", 160, 950); g.fillText("Номер сертификата", 1040, 950);
-  g.fillStyle = "#e8ecef"; g.font = '600 30px "Golos Text", sans-serif';
-  g.fillText(new Date(ex.date).toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" }), 160, 992);
-  g.fillText(ex.cid, 1040, 992);
-  g.textAlign = "center"; g.fillStyle = "#6b8193"; g.font = '19px "Golos Text", sans-serif';
-  g.fillText("Сертификат подтверждает прохождение учебного курса в приложении AVALAND", 800, 1040);
+  certFooter(g, ex.date, ex.cid);
   return c;
+}
+async function trackCertCanvas(tid) {
+  await fontsReady();
+  const T = TRACKS[tid], tc = S.tracks[tid], P0 = LANGS[IDX[T.parent]];
+  const [c, g] = certBase(P0.color);
+  g.fillStyle = "#e8ecef"; g.font = '68px "Russo One", sans-serif'; g.fillText("СЕРТИФИКАТ ПУТИ", 800, 370);
+  g.fillStyle = "#93a6b5"; g.font = '30px "Golos Text", sans-serif'; g.fillText("подтверждает, что", 800, 430);
+  g.fillStyle = "#e2b04a"; g.font = '60px "Russo One", sans-serif'; g.fillText(S.profile.name || "Студент AVALAND", 800, 515);
+  g.fillStyle = "#e8ecef"; g.font = '32px "Golos Text", sans-serif';
+  g.fillText(`прошёл(ла) «${T.title}»: ${P0.name} и ${T.caves.length} ${plural(T.caves.length, "пещеру", "пещеры", "пещер")}`, 800, 585);
+  g.fillStyle = "#93a6b5"; g.font = '30px "Golos Text", sans-serif'; g.fillText("и готов(а) претендовать на позицию", 800, 650);
+  g.fillStyle = "#e2b04a"; g.font = '54px "Russo One", sans-serif'; g.fillText(T.role, 800, 725);
+  g.fillStyle = "#93a6b5"; g.font = '23px "Golos Text", sans-serif';
+  wrapText(g, "Изучено: " + [P0.name].concat(trackCaves(tid).map(k => LANGS[k].name)).join(" → "), 800, 790, 1250, 32);
+  wrapText(g, "Подходящие вакансии: " + T.jobs, 800, 860, 1250, 32);
+  certFooter(g, tc.date, tc.cid);
+  return c;
+}
+async function openTrackCert(tid) {
+  const T = TRACKS[tid];
+  if (!S.tracks[tid]) return openTrack(tid);
+  const c = await trackCertCanvas(tid), data = c.toDataURL("image/png");
+  shell(LANGS[IDX[T.parent]].color, `${esc(T.title)} · сертификат`, `№ ${esc(S.tracks[tid].cid)}`,
+    `<img class="imgout" src="${data}" alt="Сертификат AVALAND: ${esc(T.role)}">
+     <p class="note">Вы прошли дорожную карту ${esc(T.role)}. Добавьте сертификат и проект пути в резюме и откликайтесь на вакансии: ${esc(T.jobs)}.</p>
+     <div class="acts"><button class="btn" data-act="trackProject" data-t="${tid}">Проект пути</button><button class="btn pri big" data-act="shareTrackCert" data-t="${tid}">Поделиться</button></div>`);
+  openOv();
+}
+function openTrack(tid) {
+  const T = TRACKS[tid]; if (!T) return;
+  const p = IDX[T.parent], P0 = LANGS[p], open = trackOpen(tid), done = trackDone(tid), proj = !!S.projects["track:" + tid];
+  const step = (n, cls, title, sub, btn) => `<li class="rm ${cls}"><span class="rm-n">${cls === "done" ? I.check : n}</span><div><b>${title}</b><small>${sub}</small>${btn ? `<div class="row">${btn}</div>` : ""}</div></li>`;
+  const STL = { done: "пройдена", progress: "в процессе", open: "открыта", locked: "закрыта" };
+  let html = step(0, passed(p) ? "done" : "open", `Страна ${esc(P0.name)}`, passed(p) ? "Финальный экзамен сдан — пещеры открыты" : `Захватите все ${P0.lessons.length} провинций и сдайте финальный экзамен`, passed(p) ? "" : `<button class="btn" data-act="country" data-l="${p}">К стране</button>`);
+  trackCaves(tid).forEach((c, k) => {
+    const C = LANGS[c], st = caveState(c);
+    html += step(k + 1, st, `${esc(C.name)} <span class="pill ${st === "done" ? "ok" : ""}">${STL[st]}${st === "progress" ? ` · ${heldCount(c)}/${C.lessons.length}` : ""}</span>`, `${C.about}<br><span class="why">${C.why || ""}</span>`,
+      st === "locked" ? "" : `<button class="btn ${st === "done" ? "" : "pri"}" data-act="country" data-l="${c}">${st === "done" ? "Открыть" : st === "progress" ? "Продолжить" : "Войти в пещеру"}</button>`);
+  });
+  const nC = trackCaves(tid).length;
+  html += step(nC + 1, proj ? "done" : done ? "open" : "locked", `Проект: ${esc(T.project.title)}`, T.project.desc, `<button class="btn" data-act="trackProject" data-t="${tid}">Требования</button>`);
+  html += step(nC + 2, S.tracks[tid] ? "done" : "locked", `Сертификат: ${esc(T.role)}`, S.tracks[tid] ? "Сертификат выписан на ваше имя" : "Выдаётся после экзамена последней пещеры", S.tracks[tid] ? `<button class="btn pri" data-act="trackCert" data-t="${tid}">Открыть сертификат</button>` : "");
+  shell(P0.color, `Дорожная карта · ${esc(P0.name)}`, esc(T.title),
+    `<p class="txt">${T.about}</p>
+     <div class="rm-goal">${caveIcon(22)}<div><small>Цель пути</small><b>${esc(T.role)}</b></div><span class="pill ${done ? "ok" : ""}">${trackDoneN(tid)} из ${nC} пещер</span></div>
+     ${open ? "" : `<p class="note">🔒 Пещеры откроются после финального экзамена ${esc(P0.name)}. Порядок важен: каждая следующая пещера опирается на предыдущую.</p>`}
+     <ol class="roadmap">${html}</ol>
+     <p class="note">Вакансии после пути: ${esc(T.jobs)}.</p>`);
+  openOv();
+}
+function openTrackProject(tid) {
+  const T = TRACKS[tid], key = "track:" + tid, done = !!S.projects[key];
+  shell(LANGS[IDX[T.parent]].color, `${esc(T.title)} · проект`, esc(T.project.title),
+    `<p class="txt">${T.project.desc}</p>
+     <p class="tips-h">Требования</p><ul class="tips">${T.project.req.map(r => `<li>${r}</li>`).join("")}</ul>
+     <p class="note">Этот проект показывает работодателю, что вы умеете соединять все библиотеки пути в одном продукте.</p>
+     <div class="acts"><button class="btn" data-act="track" data-t="${tid}">← Дорожная карта</button><button class="btn ${done ? "" : "pri"} big" data-act="trackProjectDone" data-t="${tid}">${done ? "Отметить как не готовый" : "Я сделал проект"}</button></div>`);
+  openOv();
 }
 async function shareCanvas() {
   await fontsReady();
@@ -815,7 +979,7 @@ function openCountry(l) {
   if (l < 0) { S.sel = null; save(); render(); return; }
   S.sel = LANGS[l].id; save();
   if (window.innerWidth <= 960) {
-    shell(LANGS[l].color, esc(LANGS[l].name), esc(LANGS[l].land), `<div class="panel">${countryHTML(l, true)}</div>`);
+    shell(LANGS[l].color, LANGS[l].cave ? `Пещера · ${esc(LANGS[l].name)}` : esc(LANGS[l].name), esc(LANGS[l].land), `<div class="panel">${countryHTML(l, true)}</div>`);
     openOv();
     if (S.tab === "map") drawMap();
   } else { if (!ov.hidden) closeOv(); S.tab = "map"; render(); }
@@ -823,6 +987,8 @@ function openCountry(l) {
 
 /* ---------------- events ---------------- */
 document.addEventListener("click", async e => {
+  const cm = e.target.closest && e.target.closest(".cavemk");
+  if (cm && cm.closest("#map")) { haptic("tap"); openTrack(cm.dataset.t); return; }
   const hx = e.target.closest && e.target.closest(".hx");
   if (hx && hx.closest("#map")) { haptic("tap"); openCountry(+hx.dataset.l); return; }
   const b = e.target.closest("[data-act]"); if (!b || b.tagName === "FORM") return;
@@ -840,6 +1006,11 @@ document.addEventListener("click", async e => {
     case "shareCert": shareImage(await certCanvas(l), "avaland-certificate.png", `Мой сертификат AVALAND по ${LANGS[l].name}`); break;
     case "share": shareImage(await shareCanvas(), "avaland-map.png", `Моя империя в AVALAND: ${stats().pct}% мира кода`); break;
     case "project": openProject(l); break;
+    case "track": openTrack(b.dataset.t); break;
+    case "trackCert": openTrackCert(b.dataset.t); break;
+    case "shareTrackCert": { const T = TRACKS[b.dataset.t]; shareImage(await trackCertCanvas(b.dataset.t), "avaland-path.png", `Я прошёл путь «${T.title}» в AVALAND и готов к позиции ${T.role}`); break; }
+    case "trackProject": openTrackProject(b.dataset.t); break;
+    case "trackProjectDone": { const k = "track:" + b.dataset.t; S.projects[k] = !S.projects[k]; save(); openTrackProject(b.dataset.t); break; }
     case "projectDone": { const id = LANGS[l].id; S.projects[id] = !S.projects[id]; save(); openProject(l); break; }
     case "pick": pick(+b.dataset.o); break;
     case "next": next(); break;
@@ -910,15 +1081,16 @@ function onbStep(n) {
     const m = mapSVG("wide", stFn, -1, false);
     body = `${steps}<h1>Захвати <span>мир кода</span></h1>
       <svg class="mini" viewBox="${m.vb}" aria-hidden="true">${m.html}</svg>
-      <div class="feat">${hexChip("#6fa060", "")}<div><b>${LANGS.length} стран-языков</b><span>Python, JavaScript, SQL, Java, Kotlin, Swift и другие. ${LANGS.reduce((a, L) => a + L.lessons.length, 0)} уроков с примерами кода.</span></div></div>
+      <div class="feat">${hexChip("#6fa060", "")}<div><b>${CN.length} стран-языков</b><span>Python, JavaScript, SQL, Java, Kotlin, Swift и другие. ${LANGS.reduce((a, L) => a + L.lessons.length, 0)} уроков с примерами кода.</span></div></div>
       <div class="feat">${hexChip("#e2b04a", "")}<div><b>Урок — провинция</b><span>Пройдите испытание, и туман над землёй рассеется.</span></div></div>
       <div class="feat">${hexChip("#e0654f", "")}<div><b>Повторяйте раз в 14 дней</b><span>Иначе провинции попадут в осаду. Так знания не забываются.</span></div></div>
       <div class="feat">${hexChip("#8b5fb0", "")}<div><b>Экзамен и сертификат</b><span>Сложный финальный экзамен по каждому языку и проект для портфолио.</span></div></div>
+      <div class="feat">${hexChip("#8a7a5c", "")}<div><b>Пещеры-библиотеки</b><span>После экзамена открываются пещеры: PyTorch, React, Spring, Docker… Пройдите путь — получите сертификат готовности к работе джуном.</span></div></div>
       <button class="btn pri big full" data-act="onb" data-step="1">Начать</button>`;
   } else if (n === 1) {
     if (!S.sel) S.sel = "py";
     body = `${steps}<h1>С чего <span>начнём?</span></h1><p class="lead">Выберите первую страну. Остальные откроются в любой момент.</p>
-      <div class="chips">${LANGS.map(L => `<button class="lchip" data-act="onbLang" data-id="${L.id}" aria-pressed="${S.sel === L.id}"><i style="background:${L.color}"></i>${esc(L.name)}</button>`).join("")}</div>
+      <div class="chips">${CN.map(L => `<button class="lchip" data-act="onbLang" data-id="${L.id}" aria-pressed="${S.sel === L.id}"><i style="background:${L.color}"></i>${esc(L.name)}</button>`).join("")}</div>
       <div class="field"><label for="onb-name">Как вас зовут? Имя попадёт в сертификаты</label><input class="input" id="onb-name" value="${esc(S.profile.name)}" maxlength="60" autocomplete="name" placeholder="Имя и фамилия"></div>
       <button class="btn pri big full" data-act="onb" data-step="2">Дальше</button>`;
   } else {
@@ -958,6 +1130,6 @@ async function boot() {
 }
 /*@PRACTICE@*/
 /*@CLOUD@*/
-if (DEV || window.AVA_SELFTEST) window.__ava = { get S() { return S; }, get Q() { return Q; }, save, render, startQuiz, openLesson, openCert, openCountry, openProblem, runJS, runPY, runSQL, leetFetch, runCode, wrapProgram, openPlay };
+if (DEV || window.AVA_SELFTEST) window.__ava = { get S() { return S; }, get Q() { return Q; }, save, render, startQuiz, openLesson, openCert, openCountry, openTrack, openTrackCert, openProblem, runJS, runPY, runSQL, leetFetch, runCode, wrapProgram, openPlay };
 boot();
 })();

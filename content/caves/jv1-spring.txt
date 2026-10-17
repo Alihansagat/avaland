@@ -1,0 +1,308 @@
+@lang id=spring name=Spring Boot land=Пещера Spring Boot color=#6db33f cave=java track=jvm step=1
+@about Самый востребованный Java-фреймворк: REST-контроллеры, бины, конфигурация, валидация и обработка ошибок.
+@why Первая, потому что почти каждая вакансия Java-бэкенда — это Spring Boot. Он связывает всё остальное: базу через Spring Data и тесты через JUnit.
+
+@lesson Приложение и REST-контроллер
+Spring Boot-приложение создают на start.spring.io: выбирают Java, Maven или Gradle и зависимости (Spring Web, Validation, Data JPA). Точка входа — класс с `@SpringBootApplication` и методом `main`; встроенный Tomcat запускается сам на порту 8080.
+`@RestController` отмечает класс, методы которого отвечают JSON. Маршруты задают `@GetMapping`, `@PostMapping`, `@PutMapping`, `@DeleteMapping`; данные из пути — `@PathVariable`, из строки запроса — `@RequestParam`, из тела — `@RequestBody`.
+Объекты Java автоматически превращаются в JSON библиотекой Jackson. Для данных ответа удобны `record`.
+```code
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.web.bind.annotation.*;
+import java.util.*;
+
+@SpringBootApplication
+public class ShopApplication {
+    public static void main(String[] args) { SpringApplication.run(ShopApplication.class, args); }
+}
+
+record Product(long id, String name, int price) {}
+
+@RestController
+@RequestMapping("/api/products")
+class ProductController {
+    private final Map<Long, Product> store = new HashMap<>(Map.of(1L, new Product(1, "Ноутбук", 450000)));
+
+    @GetMapping
+    List<Product> all(@RequestParam(defaultValue = "0") int minPrice) {
+        return store.values().stream().filter(p -> p.price() >= minPrice).toList();
+    }
+
+    @GetMapping("/{id}")
+    Product one(@PathVariable long id) {
+        return Optional.ofNullable(store.get(id)).orElseThrow(() -> new NoSuchElementException("нет товара " + id));
+    }
+}
+```
+! `@RestController` = `@Controller` + ответ в JSON
+! `@PathVariable` — из пути, `@RequestParam` — после `?`, `@RequestBody` — тело
+! Запуск: `./mvnw spring-boot:run` или `./gradlew bootRun`
+? mc Какая аннотация берёт `id` из пути `/api/products/7`?
++ @PathVariable
+- @RequestParam
+- @RequestBody
+- @Autowired
+= Переменная пути из шаблона {id}.
+? out Что выведет код?
+```code
+import java.util.*;
+record Product(long id, String name, int price) {}
+var list = List.of(new Product(1, "A", 100), new Product(2, "B", 500), new Product(3, "C", 300));
+System.out.println(list.stream().filter(p -> p.price() >= 300).map(Product::name).toList());
+```
+> [B, C]
+= Фильтр оставляет товары дороже 300 и берёт их названия.
+? fill Впишите аннотацию класса, методы которого возвращают JSON.
+```code
+@___
+class OrderController {}
+```
+> RestController
+= @RestController объединяет @Controller и @ResponseBody.
+? mc Что запускает HTTP-сервер в Spring Boot-приложении?
++ Встроенный Tomcat, который поднимается автоматически при SpringApplication.run
+- Отдельно установленный Apache
+- Nginx внутри JVM
+- Ничего, нужен деплой WAR
+= Spring Boot упаковывает сервер в приложение.
+
+@lesson Бины и внедрение зависимостей
+Spring управляет объектами-бинами: создаёт их и связывает. Классы с `@Service`, `@Repository`, `@Component`, `@RestController` становятся бинами при сканировании пакета.
+Зависимости передают через конструктор: если у класса один конструктор, Spring сам найдёт нужные бины. Поля делают `final`, а `@Autowired` на поле — устаревший стиль, его трудно тестировать.
+Слои приложения: контроллер (HTTP) → сервис (бизнес-логика, транзакции) → репозиторий (база). Контроллер не ходит в базу напрямую.
+```code
+import org.springframework.stereotype.*;
+import org.springframework.web.bind.annotation.*;
+
+interface PriceRules { int discountPercent(int total); }
+
+@Component
+class HolidayRules implements PriceRules {
+    public int discountPercent(int total) { return total >= 100_000 ? 10 : 0; }
+}
+
+@Service
+class CartService {
+    private final PriceRules rules;
+    CartService(PriceRules rules) { this.rules = rules; }      // внедрение через конструктор
+
+    int total(int sum) { return sum * (100 - rules.discountPercent(sum)) / 100; }
+}
+
+@RestController
+class CartController {
+    private final CartService cart;
+    CartController(CartService cart) { this.cart = cart; }
+
+    @GetMapping("/api/cart/total")
+    int total(@RequestParam int sum) { return cart.total(sum); }
+}
+```
+! Внедряйте зависимости через конструктор и делайте поля `final`
+! Зависите от интерфейсов — реализацию легко заменить в тестах
+! Слои: Controller → Service → Repository
+? mc Какой способ внедрения зависимостей рекомендуют в Spring?
++ Через конструктор с final-полями
+- @Autowired на приватном поле
+- new внутри метода
+- Статические поля
+= Конструктор делает зависимости явными и упрощает тесты.
+? out Что выведет код?
+```code
+interface Rules { int discount(int t); }
+Rules rules = t -> t >= 100_000 ? 10 : 0;
+int sum = 200_000;
+System.out.println(sum * (100 - rules.discount(sum)) / 100);
+```
+> 180000
+= Скидка 10% от 200 000.
+? mc Где должна быть бизнес-логика расчёта скидки?
++ В сервисе (@Service)
+- В контроллере
+- В application.yml
+- В репозитории
+= Сервисный слой содержит правила предметной области.
+? fill Впишите аннотацию для класса бизнес-логики.
+```code
+@___
+class PaymentService {}
+```
+> Service
+= @Service — специализация @Component для сервисов.
+
+@lesson Валидация и обработка ошибок
+Входные данные описывают DTO-record с аннотациями Bean Validation: `@NotBlank`, `@Email`, `@Size(min = 8)`, `@Positive`. Перед `@RequestBody` ставят `@Valid` — при нарушении Spring вернёт 400.
+Ошибки обрабатывают централизованно в классе `@RestControllerAdvice` с методами `@ExceptionHandler`: каждое исключение превращается в понятный ответ с нужным статусом.
+Для ответов с явным статусом и заголовками используют `ResponseEntity`: `ResponseEntity.status(201).body(dto)`.
+```code
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.*;
+import org.springframework.http.*;
+import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.annotation.*;
+import java.util.*;
+
+record SignupRequest(@NotBlank @Email String email, @Size(min = 8) String password) {}
+
+@RestController
+class AuthController {
+    @PostMapping("/api/signup")
+    ResponseEntity<Map<String, String>> signup(@Valid @RequestBody SignupRequest req) {
+        return ResponseEntity.status(HttpStatus.CREATED).body(Map.of("email", req.email()));
+    }
+}
+
+@RestControllerAdvice
+class ApiErrors {
+    @ExceptionHandler(NoSuchElementException.class)
+    ResponseEntity<Map<String, String>> notFound(NoSuchElementException e) {
+        return ResponseEntity.status(404).body(Map.of("error", e.getMessage()));
+    }
+    @ExceptionHandler(MethodArgumentNotValidException.class)
+    ResponseEntity<Map<String, String>> invalid(MethodArgumentNotValidException e) {
+        var f = e.getBindingResult().getFieldErrors().get(0);
+        return ResponseEntity.badRequest().body(Map.of("error", f.getField() + ": " + f.getDefaultMessage()));
+    }
+}
+```
+! Без `@Valid` аннотации на полях не проверяются
+! Один `@RestControllerAdvice` на всё приложение — единый формат ошибок
+! Не отдавайте клиенту стектрейсы
+? mc Что произойдёт, если забыть `@Valid` перед `@RequestBody`?
++ Аннотации @NotBlank и @Email не будут проверены
+- Приложение не скомпилируется
+- Вернётся 500
+- Тело не прочитается
+= @Valid запускает валидацию объекта.
+? mc Для чего `@RestControllerAdvice`?
++ Централизованно превращать исключения в HTTP-ответы
+- Для советов по коду
+- Для логирования SQL
+- Для запуска тестов
+= Обработчики исключений в одном месте для всех контроллеров.
+? out Что выведет код?
+```code
+String email = "ada@mail";
+boolean ok = email.matches("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$");
+System.out.println(ok);
+```
+> false
+= В домене нет точки.
+? fill Впишите аннотацию Bean Validation: строка не пустая и не из пробелов.
+```code
+@___ String name
+```
+> NotBlank
+= @NotBlank запрещает null, пустую строку и пробелы.
+
+@lesson Конфигурация, профили и запуск
+Настройки лежат в `application.yml` (или `.properties`): порт, адрес базы, логирование. Значения можно брать из переменных окружения: `${DB_URL}`. Секреты в файл не пишут.
+Профили (`application-dev.yml`, `application-prod.yml`) меняют настройки под окружение; активный профиль задаёт `SPRING_PROFILES_ACTIVE=prod`.
+Spring Boot Actuator добавляет эндпоинты `/actuator/health` и метрики для мониторинга. Приложение собирают в один исполняемый jar: `./mvnw package`, запускают `java -jar target/shop.jar` или в Docker.
+```code
+# src/main/resources/application.yml
+server:
+  port: 8080
+spring:
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/shop}
+    username: ${DB_USER:shop}
+    password: ${DB_PASSWORD}
+app:
+  free-delivery-from: 50000
+management:
+  endpoints.web.exposure.include: health,info
+
+# Java:
+# @ConfigurationProperties(prefix = "app")
+# record AppProps(int freeDeliveryFrom) {}
+
+# Dockerfile
+# FROM eclipse-temurin:21-jre
+# COPY target/shop.jar /app.jar
+# ENTRYPOINT ["java", "-jar", "/app.jar"]
+```
+! Секреты — только через переменные окружения
+! Профили dev и prod вместо ручной правки настроек
+! `/actuator/health` — проверка живости для балансировщика и Kubernetes
+? mc Как переключить приложение на продакшен-настройки?
++ Задать SPRING_PROFILES_ACTIVE=prod
+- Переименовать main
+- Пересобрать с другим JDK
+- Удалить application.yml
+= Профиль подключит application-prod.yml.
+? mc Что значит `${DB_PASSWORD}` в application.yml?
++ Значение берётся из переменной окружения DB_PASSWORD
+- Пароль равен строке DB_PASSWORD
+- Это комментарий
+- Пароль генерируется случайно
+= Плейсхолдеры подставляют переменные окружения и свойства.
+? fill Впишите команду Maven Wrapper, которая собирает jar.
+```code
+./mvnw ___
+```
+> package
+= package компилирует, тестирует и упаковывает приложение.
+? out Что выведет код?
+```code
+String value = System.getenv("SURELY_NOT_SET_VAR");
+String url = value != null ? value : "jdbc:postgresql://localhost:5432/shop";
+System.out.println(url.endsWith("/shop"));
+```
+> true
+= Переменная не задана — используется значение по умолчанию.
+
+@exam
+? mc Что делает `@SpringBootApplication`?
++ Включает автоконфигурацию, сканирование компонентов и отмечает класс конфигурации
+- Создаёт базу данных
+- Запускает тесты
+- Генерирует фронтенд
+= Это мета-аннотация главного класса.
+? mc Какой статус вернуть после успешного создания заказа?
++ 201 Created
+- 200 OK
+- 204 No Content
+- 302 Found
+= Создание ресурса — 201.
+? out Что выведет код?
+```code
+import java.util.*;
+Map<Long, String> m = new HashMap<>(Map.of(1L, "A"));
+System.out.println(Optional.ofNullable(m.get(2L)).orElse("нет"));
+```
+> нет
+= Ключа 2 нет — срабатывает orElse.
+? fill Впишите аннотацию маршрута для POST.
+```code
+@___("/api/orders")
+```
+> PostMapping
+= @PostMapping обрабатывает POST-запросы.
+? mc Почему контроллер не должен обращаться к базе напрямую?
++ Логика и доступ к данным должны жить в сервисах и репозиториях — так код проще тестировать и менять
+- Это запрещено компилятором
+- Так медленнее
+- Spring не разрешит
+= Разделение на слои — стандарт архитектуры.
+? mc Где хранить пароль базы данных продакшена?
++ В переменных окружения или секретах платформы
+- В application.yml в git
+- В коде контроллера
+- В README
+= Секреты не должны попадать в репозиторий.
+? out Что выведет код?
+```code
+record Item(String name, int qty) {}
+var items = java.util.List.of(new Item("a", 2), new Item("b", 3));
+System.out.println(items.stream().mapToInt(Item::qty).sum());
+```
+> 5
+= Сумма количеств 2 + 3.
+? fill Впишите аннотацию, которая включает проверку @RequestBody.
+```code
+create(@___ @RequestBody OrderRequest req)
+```
+> Valid
+= @Valid запускает Bean Validation.

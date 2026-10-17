@@ -337,3 +337,36 @@ pre.code,.editor,code,.answer .input{font-variant-ligatures:none;font-feature-se
 .acc-h{display:flex;align-items:center;gap:10px}
 .ava{width:32px;height:32px;border-radius:50%;border:1px solid var(--line)}
 input[type=password].input,input[type=email].input{font-family:var(--body)}
+/* пещеры-библиотеки и дорожные карты */
+.cavemk{cursor:pointer}
+.cavemk .cv-rock{fill:#8a7a5c;stroke:#0a1b29;stroke-width:1.4}
+.cavemk .cv-hole{fill:#0a1b29}
+.cavemk .cv-n{fill:#e8ecef;font:700 10px "Golos Text",sans-serif;text-anchor:middle;paint-order:stroke;stroke:#0a1b29;stroke-width:3}
+.cavemk .cv-lock{fill:none;stroke:#e2b04a;stroke-width:1.4}
+.cavemk.locked .cv-rock{fill:#4b4f55}
+.cavemk.done .cv-rock{fill:#e2b04a}
+.cavemk:hover .cv-rock,.cavemk:focus .cv-rock{stroke:#e2b04a;stroke-width:2}
+.box.caves .trk{display:flex;gap:10px;align-items:center;justify-content:space-between;padding:10px 0;border-top:1px solid var(--line)}
+.box.caves .trk:first-of-type{border-top:0}
+.box.caves .trk b{display:block}
+.box.caves .trk small{display:block;color:var(--muted,#93a6b5);margin:2px 0 6px}
+.box.caves .trk .btn{flex:none}
+.box.why h3{font-size:15px}
+.box.lockbox p{margin:0;color:var(--gold)}
+.rm-goal{display:flex;gap:12px;align-items:center;background:#0c2030;border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin:6px 0 14px}
+.rm-goal small{display:block;color:#93a6b5;font-size:12px}
+.rm-goal b{font-size:17px}
+.rm-goal .pill{margin-left:auto}
+.roadmap{list-style:none;margin:0;padding:0;position:relative}
+.roadmap:before{content:"";position:absolute;left:15px;top:8px;bottom:8px;width:2px;background:var(--line)}
+.rm{display:flex;gap:12px;position:relative;padding:8px 0}
+.rm-n{flex:none;width:32px;height:32px;border-radius:50%;display:grid;place-items:center;font-weight:700;background:#14354a;color:#e8ecef;border:2px solid var(--line);z-index:1}
+.rm-n svg{width:16px;height:16px}
+.rm.done .rm-n{background:var(--ok,#6fa060);border-color:var(--ok,#6fa060)}
+.rm.open .rm-n,.rm.progress .rm-n{border-color:var(--gold);color:var(--gold)}
+.rm.locked{opacity:.55}
+.rm b{display:block}
+.rm small{display:block;color:#93a6b5;margin-top:3px;line-height:1.45}
+.rm small .why{display:block;color:#c6d1da;margin-top:4px;font-style:italic}
+.rm .row{margin-top:8px}
+.plot{display:block;max-width:100%;height:auto;background:#fff;border-radius:10px;margin-top:8px}

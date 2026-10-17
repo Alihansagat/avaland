@@ -1,0 +1,294 @@
+@lang id=react name=React land=Пещера React color=#39b8d8 cave=js track=fe step=1
+@about Библиотека интерфейсов: компоненты, состояние, эффекты и формы. Стандарт фронтенда в большинстве компаний.
+@why Первая, потому что React — это просто JavaScript-функции, которые возвращают разметку. Next.js и тесты интерфейса строятся поверх React-компонентов.
+
+@lesson Компоненты и JSX
+Компонент React — функция, которая принимает объект `props` и возвращает разметку JSX. JSX похож на HTML, но это JavaScript: вместо `class` пишут `className`, выражения вставляют в фигурных скобках `{}`.
+Компоненты собирают как конструктор: `<App>` содержит `<Header>` и `<TodoList>`, а данные передаются сверху вниз через props. Props только для чтения — компонент не меняет то, что ему передали.
+Список рисуют через `map`, и каждому элементу нужен стабильный `key` — обычно id из данных. По key React понимает, какие элементы добавились, удалились или переместились.
+```code
+function Badge({ label, color = "gray" }) {
+  return <span className={`badge badge-${color}`}>{label}</span>;
+}
+
+function UserCard({ user }) {
+  return (
+    <div className="card">
+      <h3>{user.name}</h3>
+      {user.isAdmin && <Badge label="Админ" color="gold" />}
+      <ul>
+        {user.skills.map(s => <li key={s}>{s}</li>)}
+      </ul>
+    </div>
+  );
+}
+
+export default function App() {
+  const user = { name: "Ада", isAdmin: true, skills: ["JS", "React"] };
+  return <UserCard user={user} />;
+}
+```
+! Имена компонентов — с большой буквы: `<Badge />`, а `<badge />` React примет за HTML-тег
+! `key` — стабильный id, а не индекс массива, если порядок может меняться
+! Условный вывод: `{cond && <X />}` или тернарный оператор
+? mc Что такое props в React?
++ Входные данные компонента, которые передаёт родитель; внутри компонента они только для чтения
+- Внутреннее изменяемое состояние компонента
+- CSS-стили
+- Глобальные переменные
+= Props идут сверху вниз и не изменяются получателем.
+? mc Зачем элементам списка `key`?
++ Чтобы React понимал, какие элементы изменились, добавились или удалились, и правильно обновлял DOM
+- Для сортировки
+- Для CSS
+- Это необязательное украшение
+= Без стабильных ключей React может перепутать состояние элементов.
+? fill Впишите атрибут JSX вместо HTML-атрибута class.
+```code
+<div ___="card">...</div>
+```
+> className
+= class — зарезервированное слово JavaScript, поэтому в JSX — className.
+? out Что выведет код?
+```code
+const skills = ["JS", "React", "CSS"];
+const items = skills.filter(s => s.length > 2).map(s => s.toUpperCase());
+console.log(items.join(","));
+```
+> REACT,CSS
+= JS отфильтрован (длина 2), остальные переведены в верхний регистр.
+
+@lesson Состояние: useState
+Состояние — данные, которые меняются со временем и влияют на экран: счётчик, текст в поле, открыт ли список. `const [count, setCount] = useState(0)` возвращает текущее значение и функцию для его замены. Вызов setter-а заставляет React перерисовать компонент.
+Состояние нельзя менять напрямую: `todos.push(x)` не вызовет перерисовку. Нужно создать новый массив или объект: `setTodos([...todos, x])`, `setUser({ ...user, name })`.
+Если новое значение зависит от старого, передают функцию: `setCount(c => c + 1)`. Хуки вызывают только на верхнем уровне компонента — не в циклах и не в условиях.
+```code
+import { useState } from "react";
+
+export default function Todos() {
+  const [todos, setTodos] = useState([]);
+  const [text, setText] = useState("");
+
+  function add() {
+    if (!text.trim()) return;
+    setTodos(prev => [...prev, { id: Date.now(), text, done: false }]);
+    setText("");
+  }
+  function toggle(id) {
+    setTodos(prev => prev.map(t => t.id === id ? { ...t, done: !t.done } : t));
+  }
+
+  return (
+    <div>
+      <input value={text} onChange={e => setText(e.target.value)} />
+      <button onClick={add}>Добавить</button>
+      <ul>{todos.map(t =>
+        <li key={t.id} onClick={() => toggle(t.id)} style={{ textDecoration: t.done ? "line-through" : "none" }}>{t.text}</li>
+      )}</ul>
+    </div>
+  );
+}
+```
+! Состояние неизменяемо: создавайте новые массивы и объекты
+! Обновление по предыдущему значению — через функцию `setX(prev => ...)`
+! Хуки — только на верхнем уровне компонента
+? mc Почему `todos.push(item); setTodos(todos)` не обновит список?
++ Это тот же массив; React сравнивает ссылки и не видит изменений
+- push запрещён в JavaScript
+- setTodos принимает только строки
+- Нужно вызвать render вручную
+= Нужен новый массив: setTodos([...todos, item]).
+? out Что выведет код?
+```code
+const user = { name: "Ада", age: 36 };
+const next = { ...user, age: 37 };
+console.log(user.age, next.age, user === next);
+```
+> 36 37 false
+= Спред создаёт новый объект, исходный не меняется.
+? out Что выведет код?
+```code
+const todos = [{ id: 1, done: false }, { id: 2, done: false }];
+const next = todos.map(t => t.id === 2 ? { ...t, done: true } : t);
+console.log(next[1].done, todos[1].done, next[0] === todos[0]);
+```
+> true false true
+= Изменён только второй элемент (новый объект), первый объект переиспользован.
+? fill Впишите хук для состояния компонента.
+```code
+const [count, setCount] = ___(0);
+```
+> useState
+= useState возвращает значение и функцию изменения.
+
+@lesson Эффекты и загрузка данных
+`useEffect` выполняет код после отрисовки: запрос к API, подписка, таймер. Второй аргумент — массив зависимостей: `[]` — один раз при появлении компонента, `[id]` — каждый раз, когда меняется id.
+Функция, которую вернул эффект, — очистка: она вызывается перед следующим запуском и при удалении компонента. Там отписываются, останавливают таймеры, отменяют запросы через `AbortController`.
+У загрузки данных три состояния: загрузка, ошибка и данные — их нужно показать пользователю. В больших проектах загрузку берут на себя библиотеки вроде TanStack Query, которые кэшируют ответы.
+```code
+import { useEffect, useState } from "react";
+
+export default function Repos({ user }) {
+  const [repos, setRepos] = useState([]);
+  const [state, setState] = useState("loading");
+
+  useEffect(() => {
+    const ctrl = new AbortController();
+    setState("loading");
+    fetch(`https://api.github.com/users/${user}/repos`, { signal: ctrl.signal })
+      .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
+      .then(data => { setRepos(data); setState("ok"); })
+      .catch(err => { if (err.name !== "AbortError") setState("error"); });
+    return () => ctrl.abort();      // очистка: пользователь сменился или компонент исчез
+  }, [user]);
+
+  if (state === "loading") return <p>Загрузка…</p>;
+  if (state === "error") return <p>Не удалось загрузить</p>;
+  return <ul>{repos.map(r => <li key={r.id}>{r.name} ★{r.stargazers_count}</li>)}</ul>;
+}
+```
+! Укажите в зависимостях всё, что эффект использует из props и state
+! Возвращайте функцию очистки для подписок, таймеров и запросов
+! Показывайте состояния «загрузка» и «ошибка», а не только данные
+? mc Когда выполнится `useEffect(fn, [])`?
++ Один раз после первой отрисовки компонента
+- При каждой отрисовке
+- Никогда
+- Только при ошибке
+= Пустой массив зависимостей — эффект без повторов.
+? mc Зачем эффекту возвращать функцию?
++ Это очистка: отписаться, остановить таймер, отменить запрос перед повтором или удалением компонента
+- Чтобы вернуть данные в JSX
+- Чтобы ускорить рендер
+- Это обязательный синтаксис
+= Без очистки появляются утечки памяти и гонки запросов.
+? out Что выведет код?
+```code
+const log = [];
+const effect = () => { log.push("run"); return () => log.push("cleanup"); };
+let cleanup = effect();
+cleanup(); cleanup = effect();
+console.log(log.join(" "));
+```
+> run cleanup run
+= Перед повторным запуском эффекта React вызывает очистку предыдущего — эта модель показана вручную.
+? fill Впишите хук для побочных эффектов.
+```code
+___(() => { document.title = title; }, [title]);
+```
+> useEffect
+= useEffect запускает код после отрисовки при изменении зависимостей.
+
+@lesson Формы, контекст и свои хуки
+Контролируемое поле хранит значение в состоянии: `value={x}` и `onChange`. Так легко проверять ввод и отключать кнопку. Отправка формы — обработчик `onSubmit` с `e.preventDefault()`, иначе браузер перезагрузит страницу.
+Чтобы не передавать данные через пять уровней props, используют контекст: `createContext`, провайдер наверху и `useContext` там, где данные нужны. Подходит для темы, языка, текущего пользователя.
+Повторяющуюся логику выносят в свой хук — функцию с именем на `use`, внутри которой другие хуки. Например, `useLocalStorage` или `useFetch`.
+```code
+import { createContext, useContext, useState } from "react";
+
+const ThemeContext = createContext("dark");
+
+function useInput(initial = "") {
+  const [value, setValue] = useState(initial);
+  return { value, onChange: e => setValue(e.target.value), reset: () => setValue(initial) };
+}
+
+function SignupForm({ onSignup }) {
+  const email = useInput();
+  const theme = useContext(ThemeContext);
+  const valid = /^\S+@\S+\.\S+$/.test(email.value);
+  return (
+    <form className={theme} onSubmit={e => { e.preventDefault(); onSignup(email.value); email.reset(); }}>
+      <input type="email" value={email.value} onChange={email.onChange} />
+      <button disabled={!valid}>Подписаться</button>
+    </form>
+  );
+}
+
+export default function App() {
+  return <ThemeContext.Provider value="light"><SignupForm onSignup={console.log} /></ThemeContext.Provider>;
+}
+```
+! `e.preventDefault()` в onSubmit, иначе страница перезагрузится
+! Контекст — для редко меняющихся глобальных данных; для частых обновлений — менеджер состояния
+! Свой хук — обычная функция `useЧтоТо`, которая вызывает другие хуки
+? mc Что такое контролируемое поле ввода?
++ Поле, значение которого хранится в состоянии React и обновляется через onChange
+- Поле с атрибутом required
+- Поле, которое нельзя редактировать
+- Поле внутри формы
+= Состояние — единственный источник правды для значения поля.
+? out Что выведет код?
+```code
+const valid = s => /^\S+@\S+\.\S+$/.test(s);
+console.log(valid("ada@mail.kz"), valid("ada@mail"), valid("a b@c.d"));
+```
+> true false false
+= Нужны @ и точка в домене, пробелы запрещены.
+? mc Когда стоит использовать контекст вместо props?
++ Когда данные нужны многим компонентам на разной глубине: тема, язык, текущий пользователь
+- Всегда вместо props
+- Только для чисел
+- Для локального состояния одного поля
+= Контекст избавляет от передачи props через промежуточные компоненты.
+? fill Впишите хук, который читает значение контекста.
+```code
+const theme = ___(ThemeContext);
+```
+> useContext
+= useContext возвращает значение ближайшего провайдера.
+
+@exam
+? mc Что вернёт функциональный компонент React?
++ JSX-разметку (или null)
+- HTML-строку
+- Объект состояния
+- Promise
+= Компонент описывает, что показать на экране.
+? out Что выведет код?
+```code
+const a = [1, 2, 3];
+const b = [...a, 4];
+console.log(a.length, b.length, a === b);
+```
+> 3 4 false
+= Спред создаёт новый массив — так обновляют состояние.
+? mc Почему хуки нельзя вызывать внутри if?
++ React связывает хуки по порядку вызова; условие ломает этот порядок между рендерами
+- if не работает в JSX
+- Хуки работают только в классах
+- Это замедляет приложение
+= Порядок хуков должен быть одинаковым при каждом рендере.
+? fill Впишите метод события, который отменяет перезагрузку страницы при отправке формы.
+```code
+e.___();
+```
+> preventDefault
+= preventDefault отменяет действие браузера по умолчанию.
+? mc Эффект загружает данные пользователя по `id`, но в зависимостях пустой массив. Что произойдёт при смене id?
++ Данные не перезагрузятся — нужно указать [id]
+- Данные перезагрузятся автоматически
+- React выдаст ошибку компиляции
+- Компонент исчезнет
+= Эффект с [] выполняется только один раз.
+? out Что выведет код?
+```code
+let count = 0;
+const setCount = f => { count = typeof f === "function" ? f(count) : f; };
+setCount(c => c + 1); setCount(c => c + 1);
+console.log(count);
+```
+> 2
+= Функциональное обновление учитывает предыдущее значение — так работает setCount(c => c + 1).
+? mc Где хранить текущего пользователя, который нужен шапке, меню и профилю?
++ В контексте или в менеджере состояния
+- В props каждого компонента вручную через все уровни
+- В глобальной переменной window
+- В CSS
+= Контекст делает данные доступными по всему дереву.
+? mc Что делает `key` при перестановке элементов списка?
++ Позволяет React сопоставить старые и новые элементы и сохранить их состояние
+- Сортирует элементы
+- Делает элементы кликабельными
+- Ускоряет загрузку картинок
+= По ключам React понимает, что элемент переместился, а не заменился.

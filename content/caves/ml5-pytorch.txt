@@ -1,0 +1,428 @@
+@lang id=torch name=PyTorch land=Пещера PyTorch color=#e2563f cave=py track=ml step=5
+@about Нейросети: тензоры, автоматическое дифференцирование, слои, цикл обучения и готовые модели.
+@why Последняя, потому что тензор PyTorch — это массив NumPy, который умеет считать градиенты и работать на видеокарте. Без понимания признаков, метрик и переобучения из пещеры scikit-learn нейросеть превращается в чёрный ящик.
+
+@lesson Тензоры
+Тензор — многомерный массив, как в NumPy: у него есть `shape`, `dtype` и операции с broadcasting. Отличия: тензор может лежать на видеокарте (`device`) и запоминать операции для вычисления градиентов.
+Создают через `torch.tensor`, `torch.zeros`, `torch.rand`, `torch.arange`. Целые числа по умолчанию `int64`, дробные — `float32` (а не float64, как в NumPy): нейросетям хватает одинарной точности, и она быстрее.
+Матричное умножение — `@`, изменение формы — `view` или `reshape`, перевод в NumPy — `.numpy()`, из NumPy — `torch.from_numpy`. Одно число из тензора достают через `.item()`.
+```code
+import torch
+
+x = torch.tensor([[1., 2.], [3., 4.]])
+print(x.shape, x.dtype)          # torch.Size([2, 2]) torch.float32
+print(x @ x)                     # tensor([[ 7., 10.], [15., 22.]])
+print(x.sum().item())            # 10.0
+print(x.view(-1))                # tensor([1., 2., 3., 4.])
+print(torch.arange(6).reshape(2, 3).shape)   # torch.Size([2, 3])
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+x = x.to(device)                 # на видеокарту, если она есть
+print(x.mean(dim=0))             # tensor([2., 3.])
+```
+! В PyTorch ось называется `dim`, а не `axis`
+! Тензоры для одной операции должны быть на одном устройстве, иначе ошибка
+! `.item()` превращает тензор из одного элемента в обычное число Python
+? out Что выведет код?
+```code
+import torch
+t = torch.zeros(4, 3)
+print(t.shape, t.numel())
+```
+> torch.Size([4, 3]) 12
+= Форма 4×3, всего 12 элементов.
+? out Что выведет код?
+```code
+import torch
+print(torch.tensor([1.5, 2.5]).dtype)
+```
+> torch.float32
+= Дробные тензоры по умолчанию float32.
+? out Что выведет код?
+```code
+import torch
+t = torch.tensor([[1, 2], [3, 4]])
+print(t.sum(dim=1).tolist())
+```
+> [3, 7]
+= Сумма каждой строки: 1 + 2 и 3 + 4.
+? fill Впишите метод, который возвращает число из тензора с одним элементом.
+```code
+loss_value = loss.___()
+```
+> item
+= item() даёт число Python, например для логов.
+
+@lesson Autograd: градиенты автоматически
+Обучение нейросети — это подбор весов, уменьшающих ошибку. Для этого нужны производные ошибки по каждому весу. PyTorch считает их сам: тензор с `requires_grad=True` запоминает операции, а `loss.backward()` вычисляет градиенты и складывает их в `.grad`.
+Градиенты накапливаются: перед каждым новым шагом их обнуляют (`optimizer.zero_grad()`). В режиме проверки модели градиенты не нужны — код оборачивают в `with torch.no_grad():`, это экономит память и время.
+Шаг градиентного спуска: вес сдвигается против градиента на величину learning rate: `w = w - lr * w.grad`.
+```code
+import torch
+
+x = torch.tensor(3.0, requires_grad=True)
+y = x ** 2 + 2 * x            # y = x² + 2x
+y.backward()
+print(x.grad)                 # tensor(8.) — производная 2x + 2 при x = 3
+
+w = torch.tensor(0.0, requires_grad=True)
+for step in range(50):        # подбираем w, чтобы w * 2 ≈ 10
+    loss = (w * 2 - 10) ** 2
+    loss.backward()
+    with torch.no_grad():
+        w -= 0.1 * w.grad
+    w.grad.zero_()
+print(round(w.item(), 3))     # 5.0
+```
+! Без `zero_grad` градиенты с прошлых шагов складываются, и обучение ломается
+! `torch.no_grad()` — для валидации и предсказаний
+! Learning rate слишком большой — ошибка скачет, слишком маленький — обучение очень долгое
+? out Что выведет код?
+```code
+import torch
+x = torch.tensor(2.0, requires_grad=True)
+y = x ** 3
+y.backward()
+print(x.grad.item())
+```
+> 12.0
+= Производная x³ — 3x², при x = 2 это 12.
+? out Что выведет код?
+```code
+import torch
+x = torch.tensor(1.0, requires_grad=True)
+(x * 5).backward()
+(x * 5).backward()
+print(x.grad.item())
+```
+> 10.0
+= Градиенты накапливаются: 5 + 5 = 10. Поэтому их обнуляют перед каждым шагом.
+? mc Зачем оборачивать предсказания в `with torch.no_grad():`?
++ Чтобы не строить граф вычислений для градиентов и экономить память и время
+- Чтобы модель обучалась быстрее
+- Чтобы обнулить веса
+- Иначе предсказания будут случайными
+= При инференсе градиенты не нужны.
+? mc Что произойдёт при слишком большом learning rate?
+- Модель обучится идеально за один шаг
++ Ошибка начнёт скакать или расти, обучение не сойдётся
+- Ничего не изменится
+- Градиенты станут нулевыми
+= Шаги перепрыгивают минимум.
+
+@lesson Слои и nn.Module
+Модель — это класс, наследник `nn.Module`. В `__init__` объявляют слои, в `forward` описывают, как данные проходят через них. Веса слоёв регистрируются автоматически и доступны через `model.parameters()`.
+`nn.Linear(in, out)` — полносвязный слой: `y = x @ W.T + b`, у него `in * out + out` параметров. Между линейными слоями ставят нелинейность — `nn.ReLU()`, иначе сеть из многих слоёв равна одному линейному слою.
+Для простых сетей есть `nn.Sequential` — список слоёв по порядку. На выходе классификатора обычно сырые оценки (логиты) — функция потерь сама превратит их в вероятности.
+```code
+import torch
+from torch import nn
+
+class Net(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.hidden = nn.Linear(4, 16)
+        self.act = nn.ReLU()
+        self.out = nn.Linear(16, 3)
+
+    def forward(self, x):
+        return self.out(self.act(self.hidden(x)))
+
+model = Net()
+x = torch.rand(8, 4)                  # батч из 8 объектов по 4 признака
+print(model(x).shape)                 # torch.Size([8, 3])
+print(sum(p.numel() for p in model.parameters()))   # 131 = 4*16+16 + 16*3+3
+
+seq = nn.Sequential(nn.Linear(4, 16), nn.ReLU(), nn.Linear(16, 3))
+print(len(list(seq.parameters())))    # 4 — две матрицы весов и два смещения
+```
+! Вызывайте `model(x)`, а не `model.forward(x)` — так работают хуки PyTorch
+! Без нелинейности между слоями глубокая сеть не мощнее линейной модели
+! Первая размерность входа — размер батча
+? out Что выведет код?
+```code
+from torch import nn
+layer = nn.Linear(10, 5)
+print(sum(p.numel() for p in layer.parameters()))
+```
+> 55
+= 10 * 5 весов + 5 смещений.
+? out Что выведет код?
+```code
+import torch
+from torch import nn
+print(nn.ReLU()(torch.tensor([-2.0, 0.0, 3.0])).tolist())
+```
+> [0.0, 0.0, 3.0]
+= ReLU заменяет отрицательные значения нулём.
+? mc Зачем нужна функция активации между линейными слоями?
++ Без неё несколько линейных слоёв сводятся к одному линейному преобразованию
+- Чтобы ускорить вычисления
+- Чтобы уменьшить число параметров
+- Она нужна только на выходе
+= Нелинейность позволяет сети приближать сложные зависимости.
+? fill Впишите метод модели, где описывают проход данных через слои.
+```code
+def ___(self, x):
+    return self.out(self.act(self.hidden(x)))
+```
+> forward
+= forward задаёт вычисление; вызывается при model(x).
+
+@lesson Цикл обучения
+Обучение повторяется по эпохам: для каждого батча — прямой проход, функция потерь, `zero_grad`, `backward`, шаг оптимизатора `optimizer.step()`. Для регрессии берут `nn.MSELoss`, для классификации — `nn.CrossEntropyLoss` (на вход логиты и номера классов).
+Оптимизатор обновляет веса по градиентам: `torch.optim.SGD` — классический спуск, `Adam` — адаптивный и хороший выбор по умолчанию.
+Режимы модели переключают явно: `model.train()` перед обучением, `model.eval()` перед проверкой — это важно для слоёв Dropout и BatchNorm. После каждой эпохи смотрят ошибку на валидации, чтобы поймать переобучение.
+```code
+import torch
+from torch import nn
+
+torch.manual_seed(0)
+X = torch.linspace(-1, 1, 64).unsqueeze(1)       # форма (64, 1)
+y = 3 * X + 0.5 + 0.05 * torch.randn_like(X)
+
+model = nn.Linear(1, 1)
+loss_fn = nn.MSELoss()
+opt = torch.optim.Adam(model.parameters(), lr=0.1)
+
+for epoch in range(200):
+    model.train()
+    pred = model(X)
+    loss = loss_fn(pred, y)
+    opt.zero_grad()
+    loss.backward()
+    opt.step()
+
+model.eval()
+with torch.no_grad():
+    w, b = model.weight.item(), model.bias.item()
+print(round(w, 1), round(b, 1))     # 3.0 0.5
+print(loss.item() < 0.01)           # True
+```
+! Порядок в цикле: forward → loss → zero_grad → backward → step
+! `CrossEntropyLoss` ждёт логиты, softmax перед ним не нужен
+! `model.eval()` и `torch.no_grad()` — при каждой проверке модели
+? mc Какой порядок шагов в цикле обучения правильный?
++ forward, loss, zero_grad, backward, step
+- step, backward, loss, forward
+- backward, forward, step, loss
+- zero_grad, step, forward, backward
+= Сначала считают ошибку, потом градиенты, потом обновляют веса.
+? out Что выведет код?
+```code
+import torch
+from torch import nn
+loss = nn.MSELoss()(torch.tensor([1.0, 2.0]), torch.tensor([1.0, 4.0]))
+print(loss.item())
+```
+> 2.0
+= Квадраты ошибок 0 и 4, среднее 2.
+? mc Что подают в `nn.CrossEntropyLoss` для классификации на 3 класса?
++ Логиты формы (N, 3) и номера классов формы (N,)
+- Вероятности после softmax и one-hot векторы
+- Только номера классов
+- Одно число на объект
+= CrossEntropyLoss сама применяет log-softmax к логитам.
+? fill Впишите метод оптимизатора, который обновляет веса.
+```code
+optimizer.___()
+```
+> step
+= step делает шаг по накопленным градиентам.
+
+@lesson Данные: Dataset и DataLoader
+Данные редко помещаются в один тензор. `Dataset` описывает, как получить один пример: методы `__len__` и `__getitem__`. Для готовых тензоров есть `TensorDataset`.
+`DataLoader` нарезает датасет на батчи, перемешивает их (`shuffle=True` для обучения) и может загружать данные параллельно. Размер батча — компромисс: больше батч — быстрее эпоха, но больше памяти.
+Для картинок есть `torchvision`: готовые датасеты (MNIST, CIFAR-10), преобразования (`transforms.ToTensor`, `Normalize`, аугментации) и предобученные модели.
+```code
+import torch
+from torch.utils.data import TensorDataset, DataLoader, Dataset
+
+X = torch.arange(10, dtype=torch.float32).unsqueeze(1)
+y = (X.squeeze() > 4).long()
+ds = TensorDataset(X, y)
+print(len(ds), ds[7])                 # 10 (tensor([7.]), tensor(1))
+
+loader = DataLoader(ds, batch_size=4, shuffle=False)
+print([xb.shape[0] for xb, yb in loader])   # [4, 4, 2]
+
+class Squares(Dataset):
+    def __len__(self):
+        return 5
+    def __getitem__(self, i):
+        return torch.tensor([float(i)]), torch.tensor([float(i * i)])
+
+xb, yb = next(iter(DataLoader(Squares(), batch_size=5)))
+print(yb.squeeze().tolist())          # [0.0, 1.0, 4.0, 9.0, 16.0]
+```
+! `shuffle=True` для обучающего загрузчика, `False` — для валидации
+! Последний батч может быть меньше остальных
+! Тяжёлые преобразования делайте в `__getitem__` — тогда DataLoader распараллелит их
+? out Что выведет код?
+```code
+import torch
+from torch.utils.data import TensorDataset, DataLoader
+ds = TensorDataset(torch.zeros(23, 3))
+print(len(DataLoader(ds, batch_size=10)))
+```
+> 3
+= 23 объекта по 10 — три батча: 10, 10 и 3.
+? mc Какие методы обязательны у своего Dataset?
++ __len__ и __getitem__
+- fit и predict
+- forward и backward
+- train и eval
+= DataLoader узнаёт размер через __len__ и берёт примеры через __getitem__.
+? mc Почему для обучения ставят `shuffle=True`?
++ Чтобы батчи в каждой эпохе были разными и модель не подстраивалась под порядок данных
+- Чтобы ускорить загрузку
+- Чтобы уменьшить размер батча
+- Это обязательно для валидации
+= Перемешивание делает градиентный спуск устойчивее.
+? fill Впишите класс, который нарезает датасет на батчи.
+```code
+loader = ___(ds, batch_size=32, shuffle=True)
+```
+> DataLoader
+= DataLoader из torch.utils.data.
+
+@lesson Свёрточные сети, готовые модели и сохранение
+Для картинок используют свёрточные слои `nn.Conv2d`: они ищут локальные узоры (края, текстуры) одним и тем же фильтром по всему изображению. Вход имеет форму (батч, каналы, высота, ширина). `nn.MaxPool2d(2)` уменьшает высоту и ширину вдвое.
+Обучать большую сеть с нуля дорого. Transfer learning берёт предобученную модель из `torchvision.models` (например, ResNet), замораживает её слои и обучает только новый последний слой под свои классы — хватает нескольких сотен картинок.
+Сохраняют обычно не всю модель, а её веса: `torch.save(model.state_dict(), "model.pt")`, загружают через `model.load_state_dict(torch.load("model.pt"))`. Для продакшена модель экспортируют в TorchScript или ONNX.
+```code
+import torch
+from torch import nn
+
+conv = nn.Sequential(
+    nn.Conv2d(3, 16, kernel_size=3, padding=1),   # 3 канала RGB → 16 карт признаков
+    nn.ReLU(),
+    nn.MaxPool2d(2),                               # 32×32 → 16×16
+    nn.Conv2d(16, 32, kernel_size=3, padding=1),
+    nn.ReLU(),
+    nn.AdaptiveAvgPool2d(1),
+    nn.Flatten(),
+    nn.Linear(32, 10),
+)
+images = torch.rand(4, 3, 32, 32)
+print(conv(images).shape)                  # torch.Size([4, 10])
+print(conv[2](conv[1](conv[0](images))).shape)   # torch.Size([4, 16, 16, 16])
+
+# transfer learning (нужен интернет для загрузки весов):
+# from torchvision.models import resnet18, ResNet18_Weights
+# model = resnet18(weights=ResNet18_Weights.DEFAULT)
+# for p in model.parameters(): p.requires_grad = False
+# model.fc = nn.Linear(model.fc.in_features, 5)    # 5 своих классов
+
+torch.save(conv.state_dict(), "cnn.pt")
+conv.load_state_dict(torch.load("cnn.pt"))
+print("веса сохранены и загружены")
+```
+! Порядок осей картинки в PyTorch: (батч, каналы, высота, ширина)
+! `padding=1` при `kernel_size=3` сохраняет размер картинки
+! Сохраняйте `state_dict`, а не весь объект модели
+? out Что выведет код?
+```code
+import torch
+from torch import nn
+x = torch.rand(2, 1, 28, 28)
+print(nn.MaxPool2d(2)(x).shape)
+```
+> torch.Size([2, 1, 14, 14])
+= MaxPool2d(2) уменьшает высоту и ширину вдвое.
+? out Что выведет код?
+```code
+import torch
+from torch import nn
+x = torch.rand(1, 3, 32, 32)
+print(nn.Conv2d(3, 8, kernel_size=3, padding=1)(x).shape)
+```
+> torch.Size([1, 8, 32, 32])
+= 8 фильтров дают 8 каналов, padding=1 сохраняет размер 32×32.
+? mc Что такое transfer learning?
++ Взять модель, обученную на большом наборе данных, и дообучить её под свою задачу
+- Перенести модель с CPU на GPU
+- Скопировать данные из одной таблицы в другую
+- Обучить модель с нуля на маленьких данных
+= Предобученные слои уже умеют находить общие признаки, остаётся обучить последний слой.
+? fill Впишите метод модели, который возвращает словарь весов для сохранения.
+```code
+torch.save(model.___(), "model.pt")
+```
+> state_dict
+= state_dict содержит все параметры и буферы модели.
+
+@exam
+? out Что выведет код?
+```code
+import torch
+a = torch.ones(2, 3)
+b = torch.ones(3, 4)
+print((a @ b).shape)
+```
+> torch.Size([2, 4])
+= (2, 3) @ (3, 4) = (2, 4).
+? out Что выведет код?
+```code
+import torch
+x = torch.tensor(4.0, requires_grad=True)
+y = 3 * x ** 2
+y.backward()
+print(x.grad.item())
+```
+> 24.0
+= Производная 3x² — 6x, при x = 4 это 24.
+? mc Ошибка на обучении падает, а на валидации растёт после 10 эпох. Что сделать?
++ Остановить обучение раньше, добавить регуляризацию или данные
+- Учить ещё 100 эпох
+- Увеличить learning rate в 10 раз
+- Убрать валидацию
+= Это переобучение; помогают early stopping, dropout, weight decay, аугментации.
+? out Что выведет код?
+```code
+from torch import nn
+print(sum(p.numel() for p in nn.Linear(3, 2).parameters()))
+```
+> 8
+= 3 * 2 весов + 2 смещения.
+? mc Что делает `optimizer.zero_grad()`?
++ Обнуляет накопленные градиенты перед новым шагом
+- Обнуляет веса модели
+- Сбрасывает learning rate
+- Удаляет модель
+= Иначе градиенты разных батчей сложатся.
+? fill Впишите режим модели перед проверкой на валидации.
+```code
+model.___()
+```
+> eval
+= eval отключает dropout и переводит BatchNorm в режим инференса.
+? out Что выведет код?
+```code
+import torch
+x = torch.arange(12)
+print(x.view(3, -1).shape)
+```
+> torch.Size([3, 4])
+= 12 элементов на 3 строки — 4 столбца.
+? mc Почему в PyTorch по умолчанию float32, а не float64?
++ Нейросетям хватает одинарной точности, а она в два раза экономнее по памяти и быстрее на GPU
+- float64 не поддерживается
+- float32 точнее
+- Так исторически сложилось в NumPy
+= Для обучения точности float32 достаточно; иногда используют даже float16.
+? out Что выведет код?
+```code
+import torch
+from torch.utils.data import TensorDataset
+ds = TensorDataset(torch.arange(6), torch.arange(6) * 2)
+print(ds[3][1].item())
+```
+> 6
+= Четвёртый пример: x = 3, y = 6.
+? mc Как правильно сохранить обученную модель для дальнейшего использования?
++ `torch.save(model.state_dict(), path)` и потом `load_state_dict`
+- Сделать скриншот весов
+- `pickle` всего процесса Python
+- Сохранить только оптимизатор
+= state_dict — переносимый и рекомендуемый способ.

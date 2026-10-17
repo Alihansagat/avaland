@@ -67,6 +67,9 @@ def parse(path: Path):
             for k, v in re.findall(r"(\w+)=(.*?)(?=\s\w+=|$)", line[6:]):
                 lang[k] = v.strip()
             continue
+        if line.startswith("@why "):
+            lang["why"] = inline(line[5:].strip())
+            continue
         if line.startswith("@about "):
             lang["about"] = inline(line[7:].strip())
             continue
@@ -140,11 +143,12 @@ def parse(path: Path):
             check_q(qq, f"{path.name} L{i+1}Q{j+1}")
     for j, qq in enumerate(lang["exam"]):
         check_q(qq, f"{path.name} EXAM Q{j+1}")
-    if len(lang["lessons"]) != 8:
+    cave = "cave" in lang
+    if (cave and len(lang["lessons"]) < 4) or (not cave and len(lang["lessons"]) != 8):
         errors.append(f"{path.name}: {len(lang['lessons'])} lessons")
-    if len(lang["exam"]) < 12:
+    if len(lang["exam"]) < (8 if cave else 12):
         errors.append(f"{path.name}: exam has {len(lang['exam'])}")
-    for key in ("id", "name", "land", "color", "about", "project"):
+    for key in ("id", "name", "land", "color", "about") + (("track", "step", "why") if cave else ("project",)):
         if key not in lang:
             errors.append(f"{path.name}: missing {key}")
     return lang, errors
@@ -160,9 +164,10 @@ def compact(lang):
         else:
             out["ans"] = q["ans"]
         return out
+    extra = {"cave": lang["cave"], "track": lang["track"], "step": int(lang["step"]), "why": lang["why"]} if "cave" in lang else {"project": lang["project"]}
     return {
         "id": lang["id"], "name": lang["name"], "land": lang["land"], "color": lang["color"],
-        "about": lang["about"], "project": lang["project"],
+        "about": lang["about"], **extra,
         "lessons": [{"t": l["t"], "body": l["body"], "code": l["code"], "tips": l["tips"], "q": [cq(q) for q in l["q"]]} for l in lang["lessons"]],
         "exam": [cq(q) for q in lang["exam"]],
     }
@@ -170,25 +175,44 @@ def compact(lang):
 
 def main(out_path):
     langs, all_err = {}, []
-    for p in sorted((ROOT / "content").glob("*.txt")):
+    caves = []
+    for p in sorted((ROOT / "content").glob("*.txt")) + sorted((ROOT / "content" / "caves").glob("*.txt")):
         lang, errs = parse(p)
         all_err += errs
-        langs[lang["id"]] = compact(lang)
+        if lang.get("id") in langs or any(c["id"] == lang.get("id") for c in caves):
+            all_err.append(f"{p.name}: duplicate id {lang.get('id')}")
+        if errs:
+            continue
+        if "cave" in lang:
+            caves.append(compact(lang))
+        else:
+            langs[lang["id"]] = compact(lang)
+    tracks = json.loads((ROOT / "content" / "tracks.json").read_text(encoding="utf-8"))
+    for tid, t in tracks.items():
+        got = sorted([c for c in caves if c["track"] == tid], key=lambda c: c["step"])
+        if not t.get("soon") and [c["id"] for c in got] != t["caves"]:
+            all_err.append(f"track {tid}: caves {[c['id'] for c in got]} != {t['caves']}")
+        for c in got:
+            if c["cave"] != t["parent"]:
+                all_err.append(f"cave {c['id']}: parent {c['cave']} != track parent {t['parent']}")
     missing = [i for i in ORDER if i not in langs]
     if missing:
         all_err.append(f"missing languages: {missing}")
     if all_err:
         print("\n".join(all_err)); sys.exit(1)
     data = [langs[i] for i in ORDER]
+    track_order = list(tracks)
+    data += sorted(caves, key=lambda c: (track_order.index(c["track"]) if c["track"] in track_order else 99, c["step"]))
     norun_file = ROOT / "content" / "norun.list"
     norun = {l.strip() for l in norun_file.read_text(encoding="utf-8").splitlines() if l.strip() and not l.startswith("#")} if norun_file.exists() else set()
     for L in data:
         for i, les in enumerate(L["lessons"]):
             if f'{L["id"]}:{i}' in norun:
                 les["run"] = False
-    Path(out_path).write_text("window.AVA_CONTENT=" + json.dumps(data, ensure_ascii=False, separators=(",", ":")) + ";\n", encoding="utf-8")
+    Path(out_path).write_text("window.AVA_CONTENT=" + json.dumps(data, ensure_ascii=False, separators=(",", ":")) + ";\nwindow.AVA_TRACKS=" + json.dumps(tracks, ensure_ascii=False, separators=(",", ":")) + ";\n", encoding="utf-8")
     nl = sum(len(l["lessons"]) for l in data)
     nq = sum(len(x["q"]) for l in data for x in l["lessons"]) + sum(len(l["exam"]) for l in data)
+    print(f"caves: {len(caves)} in {len([t for t in tracks.values() if not t.get('soon')])} tracks")
     print(f"ok: {len(data)} languages, {nl} lessons, {nq} questions, {Path(out_path).stat().st_size//1024} KB")
 
 

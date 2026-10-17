@@ -1,0 +1,311 @@
+@lang id=laravel name=Laravel land=Пещера Laravel color=#ff2d20 cave=php track=laravel step=1
+@about Самый популярный PHP-фреймворк: маршруты, контроллеры, шаблоны Blade, валидация и Artisan.
+@why Первая, потому что Laravel задаёт структуру всего приложения: куда приходит запрос, где лежит логика и как рисуется страница. База данных и API из следующих пещер встраиваются в эту структуру.
+
+@lesson Маршруты и контроллеры
+Новый проект: `composer create-project laravel/laravel shop`, запуск — `php artisan serve`. Маршруты описывают в `routes/web.php` (страницы) и `routes/api.php` (API).
+`Route::get('/courses/{id}', [CourseController::class, 'show'])` связывает адрес с методом контроллера. Параметры пути попадают в аргументы метода. Имя маршрута `->name('courses.show')` позволяет строить ссылки `route('courses.show', 7)`.
+Контроллер создаёт Artisan: `php artisan make:controller CourseController --resource` — сразу с методами index, create, store, show, edit, update, destroy.
+```code
+<?php
+// routes/web.php
+use App\Http\Controllers\CourseController;
+use Illuminate\Support\Facades\Route;
+
+Route::get('/', fn () => view('welcome'));
+Route::get('/courses', [CourseController::class, 'index'])->name('courses.index');
+Route::get('/courses/{id}', [CourseController::class, 'show'])->whereNumber('id')->name('courses.show');
+Route::resource('lessons', LessonController::class)->only(['index', 'show']);
+
+// app/Http/Controllers/CourseController.php
+namespace App\Http\Controllers;
+
+class CourseController extends Controller
+{
+    private array $courses = [1 => 'PHP', 2 => 'Laravel'];
+
+    public function index()
+    {
+        return view('courses.index', ['courses' => $this->courses]);
+    }
+
+    public function show(int $id)
+    {
+        abort_unless(isset($this->courses[$id]), 404);
+        return view('courses.show', ['title' => $this->courses[$id]]);
+    }
+}
+```
+! `php artisan route:list` показывает все маршруты
+! Ссылки стройте через `route('имя')`, а не вручную
+! `abort(404)` — правильный ответ на несуществующий объект
+? mc В каком файле описывают маршруты страниц сайта?
++ routes/web.php
+- app/routes.php
+- config/web.php
+- public/index.php
+= API — в routes/api.php.
+? mc Что создаёт `php artisan make:controller CourseController --resource`?
++ Контроллер с методами index, create, store, show, edit, update, destroy
+- Таблицу courses
+- Шаблон Blade
+- Тест
+= Ресурсный контроллер для CRUD.
+? out Что выведет код?
+```code
+$routes = ['courses.index' => '/courses', 'courses.show' => '/courses/{id}'];
+$url = str_replace('{id}', 7, $routes['courses.show']);
+echo $url;
+```
+> /courses/7
+= Так route() подставляет параметры в шаблон адреса.
+? fill Впишите метод, задающий маршруту имя.
+```code
+Route::get('/profile', [ProfileController::class, 'show'])->___('profile');
+```
+> name
+= По имени строят ссылки: route('profile').
+
+@lesson Шаблоны Blade
+Blade — шаблонизатор Laravel. Файлы `resources/views/*.blade.php`, вызов — `view('courses.show', [...])`. Вывод `{{ $title }}` автоматически экранирует HTML и защищает от XSS; `{!! $html !!}` — без экранирования, только для доверенного содержимого.
+Директивы: `@if`, `@foreach`, `@forelse ... @empty`, `@auth`, `@csrf`. Общий каркас страницы — макет: `@extends('layouts.app')` и `@section('content')`, или компоненты `<x-card>`.
+Каждая форма с POST должна содержать `@csrf` — токен защиты от подделки запросов.
+```code
+{{-- resources/views/layouts/app.blade.php --}}
+<html>
+<body>
+  <nav>@auth Привет, {{ auth()->user()->name }} @else <a href="{{ route('login') }}">Войти</a> @endauth</nav>
+  <main>@yield('content')</main>
+</body>
+</html>
+
+{{-- resources/views/courses/index.blade.php --}}
+@extends('layouts.app')
+
+@section('content')
+  <h1>Курсы ({{ count($courses) }})</h1>
+  @forelse ($courses as $id => $title)
+    <a href="{{ route('courses.show', $id) }}">{{ $title }}</a>
+  @empty
+    <p>Курсов пока нет</p>
+  @endforelse
+
+  <form method="POST" action="{{ route('courses.store') }}">
+    @csrf
+    <input name="title" value="{{ old('title') }}">
+    @error('title') <small>{{ $message }}</small> @enderror
+    <button>Создать</button>
+  </form>
+@endsection
+```
+! `{{ }}` экранирует HTML — используйте его по умолчанию
+! `@csrf` обязателен в каждой POST-форме
+! `old('поле')` возвращает введённое значение после ошибки валидации
+? mc Чем `{{ $x }}` отличается от `{!! $x !!}` в Blade?
++ {{ }} экранирует HTML, {!! !!} выводит как есть
+- Ничем
+- {!! !!} быстрее и безопаснее
+- {{ }} только для чисел
+= Неэкранированный вывод пользовательских данных — XSS-уязвимость.
+? out Что выведет код?
+```code
+$title = '<b>PHP</b>';
+echo htmlspecialchars($title);
+```
+> &lt;b&gt;PHP&lt;/b&gt;
+= Так {{ }} превращает теги в безопасный текст.
+? fill Впишите директиву Blade для защиты формы от CSRF.
+```code
+<form method="POST" action="/courses">
+  @___
+</form>
+```
+> csrf
+= @csrf добавляет скрытое поле с токеном.
+? mc Какая директива выводит запасной текст, если список пуст?
++ @forelse ... @empty ... @endforelse
+- @foreach ... @else
+- @while
+- @switch
+= forelse объединяет цикл и проверку на пустоту.
+
+@lesson Валидация и запросы
+Данные формы приходят в объекте `Request`. Метод `$request->validate([...])` проверяет поля по правилам: `required`, `string`, `max:255`, `email`, `unique:users,email`, `integer`, `min:1`. При ошибке Laravel сам вернёт пользователя на форму с сообщениями.
+Для сложных правил создают Form Request: `php artisan make:request StoreCourseRequest` — правила и авторизация в отдельном классе, контроллер остаётся коротким.
+После успешного сохранения делают редирект с сообщением: `return redirect()->route('courses.index')->with('status', 'Курс создан')`.
+```code
+<?php
+namespace App\Http\Requests;
+
+use Illuminate\Foundation\Http\FormRequest;
+
+class StoreCourseRequest extends FormRequest
+{
+    public function authorize(): bool
+    {
+        return $this->user()?->is_admin ?? false;
+    }
+
+    public function rules(): array
+    {
+        return [
+            'title' => ['required', 'string', 'max:120', 'unique:courses,title'],
+            'price' => ['required', 'integer', 'min:0'],
+            'level' => ['required', 'in:beginner,middle,advanced'],
+        ];
+    }
+}
+
+// в контроллере
+// public function store(StoreCourseRequest $request)
+// {
+//     Course::create($request->validated());
+//     return redirect()->route('courses.index')->with('status', 'Курс создан');
+// }
+```
+! Никогда не сохраняйте `$request->all()` без валидации
+! `$request->validated()` — только проверенные поля
+! Правила в Form Request делают контроллер чище
+? mc Что происходит при ошибке `$request->validate()` в обычной форме?
++ Laravel возвращает пользователя на форму с ошибками и старыми значениями
+- Приложение падает с 500
+- Данные сохраняются частично
+- Ничего
+= Для API вернётся JSON с кодом 422.
+? out Что выведет код?
+```code
+$rules = 'required|string|max:120';
+$parts = explode('|', $rules);
+echo count($parts) . ' ' . end($parts);
+```
+> 3 max:120
+= Правила можно задать строкой через «|» или массивом.
+? fill Впишите правило: значение должно быть корректной почтой.
+```code
+'email' => ['required', '___'],
+```
+> email
+= Правило email проверяет формат адреса.
+? mc Что возвращает `$request->validated()`?
++ Только поля, прошедшие валидацию
+- Все поля запроса
+- true или false
+- Список ошибок
+= Защищает от лишних полей вроде is_admin.
+
+@lesson Artisan, конфиг и middleware
+Artisan — консоль Laravel: `make:model`, `make:migration`, `migrate`, `tinker` (интерактивная консоль с доступом к приложению), `queue:work`, `schedule:run`. Свои команды — `php artisan make:command`.
+Настройки берут из `.env` (пароли, ключи, адрес базы) через `config/*.php`: в коде пишут `config('app.name')`, а не `env()` напрямую. `.env` не коммитят в Git.
+Middleware — слои вокруг запроса: `auth` пускает только вошедших, `throttle:60,1` ограничивает частоту, свои — `php artisan make:middleware`. Подключают к маршрутам: `Route::middleware('auth')->group(...)`.
+```code
+<?php
+// app/Http/Middleware/EnsureUserIsAdmin.php
+namespace App\Http\Middleware;
+
+use Closure;
+use Illuminate\Http\Request;
+
+class EnsureUserIsAdmin
+{
+    public function handle(Request $request, Closure $next)
+    {
+        if (! $request->user()?->is_admin) {
+            abort(403, 'Только для администраторов');
+        }
+        return $next($request);
+    }
+}
+
+// routes/web.php
+// Route::middleware(['auth', EnsureUserIsAdmin::class])->prefix('admin')->group(function () {
+//     Route::resource('courses', Admin\CourseController::class);
+// });
+
+// .env:  APP_ENV=production  DB_PASSWORD=секрет
+// config/services.php: 'stripe' => ['key' => env('STRIPE_KEY')]
+// в коде: config('services.stripe.key')
+```
+! `.env` — в `.gitignore`, в репозитории только `.env.example`
+! В коде читайте `config()`, а `env()` — только в файлах config
+! Группы маршрутов с middleware — вместо проверок в каждом контроллере
+? mc Где хранить пароль базы данных в Laravel-проекте?
++ В файле .env, который не попадает в Git
+- В routes/web.php
+- В контроллере
+- В README
+= В репозитории — только .env.example без секретов.
+? out Что выведет код?
+```code
+$middleware = [fn($r) => $r . ' auth', fn($r) => $r . ' admin'];
+$request = 'GET /admin';
+foreach ($middleware as $m) { $request = $m($request); }
+echo $request;
+```
+> GET /admin auth admin
+= Запрос проходит через слои по порядку.
+? fill Впишите команду Artisan для интерактивной консоли приложения.
+```code
+php artisan ___
+```
+> tinker
+= tinker — REPL с моделями и сервисами.
+? mc Какой middleware ограничивает число запросов в минуту?
++ throttle
+- auth
+- csrf
+- cache
+= throttle:60,1 — 60 запросов в минуту.
+
+@exam
+? mc Какая команда запускает встроенный сервер разработки Laravel?
++ php artisan serve
+- php -S laravel
+- composer run
+- laravel start
+= Сервер на http://127.0.0.1:8000.
+? fill Впишите хелпер, который строит адрес по имени маршрута.
+```code
+<a href="{{ ___('courses.show', 7) }}">Курс</a>
+```
+> route
+= route() не ломается при смене адреса.
+? out Что выведет код?
+```code
+$courses = [1 => 'PHP', 2 => 'Laravel'];
+$id = 3;
+echo isset($courses[$id]) ? $courses[$id] : 404;
+```
+> 404
+= Несуществующий курс — ответ 404.
+? mc Зачем `@csrf` в форме?
++ Защищает от подделки межсайтовых запросов
+- Шифрует пароль
+- Ускоряет отправку
+- Проверяет почту
+= Без токена Laravel вернёт ошибку 419.
+? mc Где описывать правила валидации сложной формы?
++ В классе Form Request
+- В шаблоне Blade
+- В .env
+- В миграции
+= Контроллер получает уже проверенные данные.
+? out Что выведет код?
+```code
+$data = ['title' => 'Laravel', 'price' => 5000, 'is_admin' => true];
+$allowed = array_intersect_key($data, array_flip(['title', 'price']));
+echo implode(',', array_keys($allowed));
+```
+> title,price
+= Так validated() отбрасывает непроверенные поля.
+? mc Какой код ответа вернёт middleware для пользователя без прав?
++ 403
+- 200
+- 301
+- 418
+= 403 Forbidden — доступ запрещён.
+? fill Впишите функцию для чтения настроек в коде приложения.
+```code
+$name = ___('app.name');
+```
+> config
+= config() читает значения из config/*.php.

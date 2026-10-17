@@ -1,0 +1,294 @@
+@lang id=rails name=Ruby on Rails land=Пещера Rails color=#d30001 cave=rb track=rails step=1
+@about Фреймворк, на котором сделаны GitHub, Shopify и Basecamp: MVC, маршруты, контроллеры, представления и генераторы.
+@why Первая, потому что Rails задаёт соглашения, по которым устроен весь проект. ActiveRecord, Hotwire и RSpec из следующих пещер живут внутри этой структуры.
+
+@lesson MVC и маршруты
+Новое приложение: `rails new academy -d postgresql`, запуск — `bin/rails server`. Rails следует принципу «соглашения важнее настроек»: модель `Course`, таблица `courses`, контроллер `CoursesController`, шаблоны в `app/views/courses/`.
+Маршруты — в `config/routes.rb`. `resources :courses` создаёт семь REST-маршрутов (index, show, new, create, edit, update, destroy) и хелперы ссылок: `courses_path`, `course_path(course)`.
+`bin/rails routes` показывает все маршруты. Вложенные ресурсы: `resources :courses do resources :lessons end` → `/courses/7/lessons`.
+```code
+# config/routes.rb
+Rails.application.routes.draw do
+  root "courses#index"
+  resources :courses do
+    resources :lessons, only: %i[index show]
+    member { post :enroll }          # POST /courses/:id/enroll
+  end
+  namespace :admin do
+    resources :courses               # Admin::CoursesController
+  end
+end
+
+# app/controllers/courses_controller.rb
+class CoursesController < ApplicationController
+  def index
+    @courses = Course.order(:title)
+  end
+
+  def show
+    @course = Course.find(params[:id])     # нет курса → 404
+  end
+end
+```
+! Следуйте соглашениям об именах — тогда Rails всё свяжет сам
+! Ссылки — через хелперы `course_path`, а не строками
+! `find` сам отвечает 404, если записи нет
+? mc Сколько маршрутов создаёт `resources :courses`?
++ 7
+- 1
+- 4
+- 12
+= index, show, new, create, edit, update, destroy.
+? mc Какой контроллер обработает маршрут `root "courses#index"`?
++ Метод index класса CoursesController
+- Метод courses класса IndexController
+- RootController
+- ApplicationController#root
+= Формат «контроллер#действие».
+? out Что выведет код?
+```code
+actions = %i[index show new create edit update destroy]
+puts actions.reject { |a| %i[new edit].include?(a) }.join(",")
+```
+> index,show,create,update,destroy
+= Так выглядят маршруты API без форм: resources :courses, except: %i[new edit].
+? fill Впишите команду Rails, показывающую все маршруты.
+```code
+bin/rails ___
+```
+> routes
+= Удобно искать имена хелперов.
+
+@lesson Контроллеры и strong parameters
+Действие контроллера кладёт данные в переменные `@courses`, а Rails сам отрисует шаблон с именем действия. `redirect_to course_path(@course), notice: "Создано"` — переход с сообщением, `render :new, status: :unprocessable_entity` — показать форму с ошибками.
+Параметры формы приходят в `params`. Strong parameters явно разрешают поля: `params.require(:course).permit(:title, :price)` — защита от записи лишних полей вроде `admin`.
+`before_action` выполняет код перед действиями: найти запись, проверить вход. Общие методы — в `ApplicationController`.
+```code
+class CoursesController < ApplicationController
+  before_action :authenticate_user!, except: %i[index show]
+  before_action :set_course, only: %i[show edit update destroy]
+
+  def create
+    @course = current_user.courses.build(course_params)
+    if @course.save
+      redirect_to @course, notice: "Курс создан"
+    else
+      render :new, status: :unprocessable_entity
+    end
+  end
+
+  def update
+    if @course.update(course_params)
+      redirect_to @course, notice: "Сохранено"
+    else
+      render :edit, status: :unprocessable_entity
+    end
+  end
+
+  private
+
+  def set_course
+    @course = Course.find(params[:id])
+  end
+
+  def course_params
+    params.require(:course).permit(:title, :price, :level)
+  end
+end
+```
+! Всегда `permit` — никогда `params[:course]` целиком
+! Повторяющийся поиск записи — в `before_action`
+! При ошибке валидации — `render` со статусом 422, при успехе — `redirect_to`
+? mc Зачем `params.require(:course).permit(:title, :price)`?
++ Разрешить сохранять только перечисленные поля
+- Сделать поля обязательными для заполнения
+- Зашифровать параметры
+- Ускорить запрос
+= Защита от массового присваивания.
+? out Что выведет код?
+```code
+params = { "title" => "Rails", "price" => "5000", "admin" => "true" }
+permitted = params.slice("title", "price")
+puts permitted.keys.inspect
+```
+> ["title", "price"]
+= permit работает как фильтр разрешённых ключей.
+? fill Впишите колбэк, выполняющийся перед действиями контроллера.
+```code
+___ :set_course, only: %i[show update]
+```
+> before_action
+= Убирает дублирование из действий.
+? mc Что делать после успешного create?
++ redirect_to на страницу созданного объекта
+- render :new
+- Ничего
+- Вернуть 500
+= Редирект после POST защищает от повторной отправки формы.
+
+@lesson Представления и формы
+Шаблоны ERB смешивают HTML и Ruby: `<%= %>` выводит результат (с экранированием), `<% %>` выполняет код без вывода. Общий каркас — `app/views/layouts/application.html.erb`, повторяющиеся куски — partial `_course.html.erb` (`render @courses`).
+`form_with model: @course` строит форму: адрес и метод выбираются сами (create или update), поля — `f.text_field :title`, `f.number_field :price`. CSRF-токен добавляется автоматически.
+Хелперы: `link_to "Открыть", @course`, `button_to "Удалить", @course, method: :delete`, `number_to_currency`, `time_ago_in_words`.
+```code
+<%# app/views/courses/index.html.erb %>
+<h1>Курсы (<%= @courses.size %>)</h1>
+<%= render @courses %>              <%# для каждого курса — _course.html.erb %>
+<%= link_to "Новый курс", new_course_path if user_signed_in? %>
+
+<%# app/views/courses/_course.html.erb %>
+<article id="<%= dom_id(course) %>">
+  <h2><%= link_to course.title, course %></h2>
+  <p><%= course.price.zero? ? "Бесплатно" : "#{course.price} ₸" %></p>
+</article>
+
+<%# app/views/courses/_form.html.erb %>
+<%= form_with model: course do |f| %>
+  <% course.errors.full_messages.each do |msg| %><p class="error"><%= msg %></p><% end %>
+  <%= f.label :title, "Название" %>
+  <%= f.text_field :title %>
+  <%= f.number_field :price, min: 0 %>
+  <%= f.submit %>
+<% end %>
+```
+! `<%= %>` экранирует HTML — `raw` и `html_safe` только для доверенного
+! Повторяющиеся куски — в partial-шаблоны
+! `form_with model:` сама выбирает create или update
+? mc Чем `<%= %>` отличается от `<% %>` в ERB?
++ <%= %> выводит результат в страницу, <% %> только выполняет код
+- Ничем
+- <% %> экранирует HTML
+- <%= %> работает только с числами
+= Циклы и условия пишут в <% %>.
+? out Что выведет код?
+```code
+require "erb"
+course = { title: "<Rails>", price: 0 }
+puts ERB::Util.html_escape(course[:title]) + " " + (course[:price].zero? ? "Бесплатно" : "#{course[:price]} ₸")
+```
+> &lt;Rails&gt; Бесплатно
+= Экранирование защищает от XSS.
+? fill Впишите хелпер для построения формы модели.
+```code
+<%= ___ model: @course do |f| %>
+```
+> form_with
+= form_with — современный способ строить формы.
+? mc Как называется файл partial для `render @courses`?
++ app/views/courses/_course.html.erb
+- app/views/course.erb
+- app/partials/courses.erb
+- _courses_list.rb
+= Имя partial начинается с подчёркивания.
+
+@lesson Генераторы, консоль и конфигурация
+Генераторы создают заготовки: `bin/rails generate scaffold Course title:string price:integer` — модель, миграцию, контроллер, шаблоны и тесты. `bin/rails db:migrate` применяет миграции.
+`bin/rails console` — интерактивная консоль с моделями приложения: удобно проверять запросы и чинить данные. Окружения: development, test, production (`RAILS_ENV`).
+Секреты хранят в зашифрованных credentials: `bin/rails credentials:edit`, в коде — `Rails.application.credentials.stripe[:key]`. Ключ `config/master.key` не коммитят. Зависимости — в `Gemfile`, установка `bundle install`.
+```code
+# терминал
+# bin/rails generate model Lesson course:references title:string position:integer
+# bin/rails db:migrate
+# bin/rails console
+#   >> Course.count
+#   >> Course.where(price: 0).pluck(:title)
+
+# config/credentials.yml.enc (после credentials:edit)
+#   stripe:
+#     key: sk_live_...
+
+# в коде
+# Stripe.api_key = Rails.application.credentials.dig(:stripe, :key)
+
+# Gemfile
+# gem "devise"          # регистрация и вход
+# gem "pundit"          # права доступа
+# group :development, :test do
+#   gem "rspec-rails"
+# end
+
+columns = "title:string price:integer".split.map { _1.split(":") }.to_h
+puts columns    # {"title"=>"string", "price"=>"integer"}
+```
+! `scaffold` хорош для изучения, в проекте генерируйте только нужное
+! Секреты — в credentials, `master.key` — не в Git
+! `bin/rails console` на продакшене — с осторожностью
+? mc Где хранить API-ключ платёжной системы в Rails?
++ В зашифрованных credentials
+- В config/routes.rb
+- В контроллере
+- В Gemfile
+= Ключ расшифровки master.key хранят вне репозитория.
+? out Что выведет код?
+```code
+fields = "title:string price:integer published:boolean".split.map { |f| f.split(":").first }
+puts fields.join(" ")
+```
+> title price published
+= Так генератор разбирает описание полей.
+? fill Впишите команду установки гемов из Gemfile.
+```code
+bundle ___
+```
+> install
+= Bundler ставит зависимости и пишет Gemfile.lock.
+? mc Что создаёт `rails generate scaffold Course title:string`?
++ Модель, миграцию, контроллер, шаблоны и тесты для CRUD
+- Только таблицу
+- Только контроллер
+- Новый проект
+= Полный набор для работы с ресурсом.
+
+@exam
+? mc Что означает принцип «соглашения важнее настроек»?
++ Rails связывает модели, таблицы, контроллеры и шаблоны по стандартным именам без ручной настройки
+- Настройки запрещены
+- Код пишут только генераторы
+- Все файлы в одной папке
+= Меньше кода, если следовать соглашениям.
+? fill Впишите метод, разрешающий поля формы.
+```code
+params.require(:course).___(:title, :price)
+```
+> permit
+= Strong parameters.
+? out Что выведет код?
+```code
+courses = [{ title: "Ruby", price: 0 }, { title: "Rails", price: 9000 }]
+puts courses.sum { _1[:price] }
+puts courses.count { _1[:price].zero? }
+```
+> 9000 1
+= Сумма цен и число бесплатных курсов.
+? mc Что вернёт `Course.find(999)`, если записи нет?
++ Бросит ActiveRecord::RecordNotFound, и Rails ответит 404
+- nil
+- Пустой объект
+- false
+= Для nil используют find_by.
+? mc Какой хелпер строит ссылку на страницу курса?
++ course_path(@course)
+- route(:course)
+- url(@course)
+- path("course")
+= Хелперы появляются из resources в routes.rb.
+? out Что выведет код?
+```code
+path = "/courses/7/lessons/3"
+_, res, id, nested, nid = path.split("/")
+puts "#{res.chop}=#{id} #{nested.chop}=#{nid}"
+```
+> course=7 lesson=3
+= Вложенные ресурсы.
+? mc Что сделать после неудачного сохранения в create?
++ render :new со статусом unprocessable_entity
+- redirect_to root_path
+- raise
+- Вернуть 200 без формы
+= Пользователь увидит форму с ошибками.
+? fill Впишите команду, открывающую консоль Rails.
+```code
+bin/rails ___
+```
+> console
+= Сокращённо bin/rails c.

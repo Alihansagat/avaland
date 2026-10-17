@@ -1,0 +1,311 @@
+@lang id=laravelapi name=API и тесты Laravel land=Пещера API color=#fb503b cave=php track=laravel step=3
+@about Laravel для бэкенда приложений: REST API, ресурсы, Sanctum, очереди и тесты на Pest.
+@why Последняя, потому что объединяет маршруты и Eloquent в API, которым пользуются мобильные и SPA-клиенты, и учит проверять всё тестами — так работают Laravel-команды в продакшене.
+
+@lesson REST API и ресурсы
+API-маршруты пишут в `routes/api.php` (префикс `/api`). `Route::apiResource('courses', CourseController::class)` создаёт index, store, show, update, destroy без форм.
+API Resource превращает модель в JSON нужной формы: `php artisan make:resource CourseResource`. Так скрывают внутренние поля и сохраняют стабильный формат при изменении базы.
+Коды ответов: 200 — ок, 201 — создано, 204 — удалено, 404 — нет, 422 — ошибка валидации (Laravel вернёт JSON с `errors` сам).
+```code
+<?php
+namespace App\Http\Resources;
+
+use Illuminate\Http\Resources\Json\JsonResource;
+
+class CourseResource extends JsonResource
+{
+    public function toArray($request): array
+    {
+        return [
+            'id' => $this->id,
+            'title' => $this->title,
+            'price' => $this->price,
+            'author' => $this->whenLoaded('author', fn () => $this->author->name),
+            'lessons_count' => $this->whenCounted('lessons'),
+        ];
+    }
+}
+
+// app/Http/Controllers/Api/CourseController.php
+// public function index()  { return CourseResource::collection(Course::with('author')->paginate(20)); }
+// public function store(StoreCourseRequest $r) {
+//     $course = $r->user()->courses()->create($r->validated());
+//     return (new CourseResource($course))->response()->setStatusCode(201);
+// }
+// public function destroy(Course $course) { $course->delete(); return response()->noContent(); }
+```
+! Наружу — только Resource, а не модель целиком
+! 201 при создании, 204 при удалении
+! Пагинация для списков — всегда
+? mc Что создаёт `Route::apiResource('courses', ...)`?
++ Маршруты index, store, show, update, destroy без create и edit
+- Только GET
+- Таблицу
+- Документацию
+= Формы create и edit в API не нужны.
+? out Что выведет код?
+```code
+$course = ['id' => 1, 'title' => 'API', 'price' => 0, 'secret_note' => 'x'];
+$resource = ['id' => $course['id'], 'title' => $course['title'], 'free' => $course['price'] === 0];
+echo json_encode($resource);
+```
+> {"id":1,"title":"API","free":true}
+= Ресурс решает, что увидит клиент.
+? fill Впишите HTTP-код ответа на успешное создание.
+```code
+return response()->json($data, ___);
+```
+> 201
+= 201 Created.
+? mc Какой код вернёт Laravel API при ошибке валидации?
++ 422
+- 500
+- 200
+- 302
+= Тело содержит message и errors.
+
+@lesson Аутентификация Sanctum и политики
+Sanctum выдаёт API-токены для мобильных приложений и cookie-сессии для SPA. Токен создают при входе: `$user->createToken('iphone')->plainTextToken`, клиент шлёт `Authorization: Bearer <токен>`.
+Защищённые маршруты — `Route::middleware('auth:sanctum')`. Пароли проверяют `Hash::check`, хранят только хешами (`Hash::make`).
+Права на действия описывают политиками: `php artisan make:policy CoursePolicy --model=Course`, метод `update(User $user, Course $course)`; в контроллере — `$this->authorize('update', $course)` или `Gate::authorize`.
+```code
+<?php
+// routes/api.php
+// Route::post('/login', LoginController::class);
+// Route::middleware('auth:sanctum')->group(function () {
+//     Route::apiResource('courses', CourseController::class);
+//     Route::get('/me', fn (Request $r) => $r->user());
+// });
+
+class LoginController
+{
+    public function __invoke(Request $request)
+    {
+        $data = $request->validate(['email' => 'required|email', 'password' => 'required']);
+        $user = User::where('email', $data['email'])->first();
+        if (! $user || ! Hash::check($data['password'], $user->password)) {
+            return response()->json(['message' => 'Неверная почта или пароль'], 401);
+        }
+        return ['token' => $user->createToken('mobile')->plainTextToken];
+    }
+}
+
+class CoursePolicy
+{
+    public function update(User $user, Course $course): bool
+    {
+        return $user->id === $course->user_id || $user->is_admin;
+    }
+}
+```
+! Пароли — только `Hash::make`, проверка — `Hash::check`
+! Права — в политиках, а не в if по всему коду
+! Одинаковое сообщение для «нет пользователя» и «неверный пароль»
+? mc Как клиент передаёт токен Sanctum?
++ В заголовке Authorization: Bearer <токен>
+- В адресе ?token=
+- В теле каждого ответа
+- В cookie с именем password
+= Токены в адресах попадают в логи.
+? out Что выведет код?
+```code
+$hash = password_hash('secret123', PASSWORD_BCRYPT);
+echo (password_verify('secret123', $hash) ? 'да' : 'нет') . ' ' . (password_verify('Secret123', $hash) ? 'да' : 'нет');
+```
+> да нет
+= Hash::check в Laravel работает так же.
+? fill Впишите middleware для маршрутов, доступных только с токеном.
+```code
+Route::middleware('auth:___')->get('/me', ...);
+```
+> sanctum
+= auth:sanctum проверяет токен или сессию.
+? mc Где описать правило «редактировать курс может автор или админ»?
++ В методе update политики CoursePolicy
+- В миграции
+- В Blade
+- В .env
+= Политики собирают права в одном месте.
+
+@lesson Очереди, события и кэш
+Медленные задачи (письма, обработка видео, запросы к внешним API) выносят в очередь: `php artisan make:job SendWelcomeEmail`, вызов `SendWelcomeEmail::dispatch($user)`. Воркер `php artisan queue:work` выполняет задачи в фоне; драйвер — Redis или база.
+Задача может повторяться при ошибке (`$tries`, `backoff`). Расписание — в `routes/console.php`: `Schedule::job(new SendDigest)->dailyAt('09:00')`, на сервере cron вызывает `schedule:run` каждую минуту.
+Кэш: `Cache::remember('top-courses', 600, fn () => ...)` — посчитать один раз и хранить 10 минут.
+```code
+<?php
+namespace App\Jobs;
+
+use Illuminate\Bus\Queueable;
+use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Foundation\Bus\Dispatchable;
+use Illuminate\Queue\InteractsWithQueue;
+use Illuminate\Support\Facades\Mail;
+
+class SendWelcomeEmail implements ShouldQueue
+{
+    use Dispatchable, InteractsWithQueue, Queueable;
+
+    public int $tries = 3;
+    public array $backoff = [10, 60];
+
+    public function __construct(public User $user) {}
+
+    public function handle(): void
+    {
+        Mail::to($this->user)->send(new WelcomeMail($this->user));
+    }
+}
+
+// после регистрации:  SendWelcomeEmail::dispatch($user);      ответ пользователю — сразу
+// $top = Cache::remember('top-courses', 600, fn () => Course::withCount('students')->orderByDesc('students_count')->take(10)->get());
+```
+! Всё медленное — в очередь, пользователь не ждёт
+! Задачи должны выдерживать повторный запуск
+! Кэш сбрасывают при изменении данных: `Cache::forget`
+? mc Зачем отправлять письмо через очередь?
++ Чтобы ответ пользователю не ждал медленного почтового сервера
+- Так письма доходят чаще
+- Очередь шифрует письма
+- Laravel не умеет отправлять письма иначе
+= Задача выполнится воркером в фоне.
+? out Что выведет код?
+```code
+$cache = [];
+$calls = 0;
+function remember(array &$cache, string $key, callable $fn) {
+    if (!array_key_exists($key, $cache)) $cache[$key] = $fn();
+    return $cache[$key];
+}
+for ($i = 0; $i < 3; $i++) remember($cache, 'top', function () use (&$calls) { $calls++; return [1, 2]; });
+echo $calls;
+```
+> 1
+= Тяжёлый расчёт выполнен один раз, дальше — из кэша.
+? fill Впишите команду, запускающую обработчик очереди.
+```code
+php artisan queue:___
+```
+> work
+= Воркер на сервере держат запущенным через Supervisor.
+? mc Что нужно на сервере для работы планировщика Laravel?
++ Cron, вызывающий php artisan schedule:run каждую минуту
+- Ничего
+- Отдельный сервер
+- Queue:work
+= Расписание описано в коде, cron лишь будит его.
+
+@lesson Тесты на Pest и деплой
+Laravel поставляется с тестами: Pest (`tests/Feature/*Test.php`). Feature-тесты делают HTTP-запросы к приложению: `$this->getJson('/api/courses')->assertOk()->assertJsonCount(3, 'data')`.
+Трейт `RefreshDatabase` откатывает базу после каждого теста; фабрики создают данные; `actingAs($user)` или `Sanctum::actingAs` входит под пользователем. `Mail::fake()` и `Queue::fake()` проверяют отправку без реальных писем.
+Запуск — `php artisan test`. Деплой: `composer install --no-dev`, `php artisan migrate --force`, `config:cache`, `route:cache`, перезапуск воркеров `queue:restart`. Готовые платформы — Laravel Cloud, Forge.
+```code
+<?php
+use App\Models\{Course, User};
+use App\Jobs\SendWelcomeEmail;
+use Illuminate\Support\Facades\Queue;
+use Laravel\Sanctum\Sanctum;
+
+uses(Illuminate\Foundation\Testing\RefreshDatabase::class);
+
+it('показывает список курсов', function () {
+    Course::factory()->count(3)->create();
+    $this->getJson('/api/courses')->assertOk()->assertJsonCount(3, 'data');
+});
+
+it('не даёт чужому пользователю менять курс', function () {
+    $course = Course::factory()->create();
+    Sanctum::actingAs(User::factory()->create());
+    $this->putJson("/api/courses/{$course->id}", ['title' => 'Взлом'])->assertForbidden();
+});
+
+it('ставит письмо в очередь после регистрации', function () {
+    Queue::fake();
+    $this->postJson('/api/register', ['name' => 'Ада', 'email' => 'ada@mail.kz', 'password' => 'secret1234'])
+        ->assertCreated();
+    Queue::assertPushed(SendWelcomeEmail::class);
+});
+```
+! `RefreshDatabase` — чистая база в каждом тесте
+! Внешние сервисы в тестах — через `fake()`
+! На продакшене `migrate --force` и кэш конфигов
+? mc Что делает трейт RefreshDatabase?
++ Возвращает базу в чистое состояние для каждого теста
+- Удаляет продакшен-базу
+- Ускоряет запросы
+- Обновляет Laravel
+= Тесты не влияют друг на друга.
+? out Что выведет код?
+```code
+$tests = ['список' => true, 'права' => true, 'очередь' => false];
+$failed = array_keys(array_filter($tests, fn($ok) => !$ok));
+echo count($tests) - count($failed) . ' passed, failed: ' . implode(',', $failed);
+```
+> 2 passed, failed: очередь
+= Итог запуска тестов.
+? fill Впишите команду запуска тестов Laravel.
+```code
+php artisan ___
+```
+> test
+= Работает и с Pest, и с PHPUnit.
+? mc Как проверить, что задача поставлена в очередь, без её выполнения?
++ Queue::fake() и затем Queue::assertPushed(...)
+- Запустить queue:work в тесте
+- Проверить почтовый ящик
+- Никак
+= Фейки заменяют реальные сервисы.
+
+@exam
+? mc Чем API Resource лучше возврата модели целиком?
++ Контролирует формат JSON и скрывает внутренние поля
+- Быстрее базы
+- Шифрует ответ
+- Обязателен для GET
+= Формат API не зависит от структуры таблиц.
+? fill Впишите метод создания токена Sanctum.
+```code
+$token = $user->___('mobile')->plainTextToken;
+```
+> createToken
+= Токен показывается один раз.
+? out Что выведет код?
+```code
+$codes = ['store' => 201, 'destroy' => 204, 'show' => 200];
+ksort($codes);
+echo implode(' ', $codes);
+```
+> 204 200 201
+= ksort сортирует по ключам: destroy, show, store.
+? mc Какой код вернуть при неверном пароле на /login?
++ 401
+- 200
+- 404
+- 500
+= 401 Unauthorized.
+? mc Что делает задача с `public int $tries = 3`?
++ Повторяется до трёх раз при ошибке
+- Выполняется трижды всегда
+- Ждёт три секунды
+- Отправляет три письма
+= Повтор помогает при временных сбоях.
+? out Что выведет код?
+```code
+$userId = 5;
+$course = ['user_id' => 7];
+$isAdmin = false;
+echo ($userId === $course['user_id'] || $isAdmin) ? 'можно' : 'нельзя';
+```
+> нельзя
+= Логика политики update.
+? fill Впишите хелпер теста для входа под пользователем через Sanctum.
+```code
+Sanctum::___($user);
+```
+> actingAs
+= Последующие запросы идут от имени пользователя.
+? mc Какие команды нужны при деплое Laravel?
++ composer install --no-dev, php artisan migrate --force, config:cache
+- npm test
+- php artisan serve
+- migrate:fresh
+= migrate:fresh на продакшене удалит данные.

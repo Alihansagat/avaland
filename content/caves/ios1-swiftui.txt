@@ -1,0 +1,339 @@
+@lang id=swiftui name=SwiftUI land=Пещера SwiftUI color=#0a84ff cave=swift track=ios step=1
+@about Интерфейсы iOS на SwiftUI: View, модификаторы, состояние, списки, навигация и Observation.
+@why Первая, потому что всё, что видит пользователь iPhone, — это SwiftUI-экраны. Сеть и хранение данных из следующих пещер подключаются к этим экранам.
+
+@lesson View и модификаторы
+Экран в SwiftUI — структура, реализующая протокол `View` со свойством `body`. Интерфейс собирают из стеков: `VStack` — сверху вниз, `HStack` — слева направо, `ZStack` — наложение; `Spacer` раздвигает элементы.
+Внешний вид меняют модификаторами: `.font(.title)`, `.padding()`, `.foregroundStyle(.secondary)`, `.background(...)`. Каждый модификатор возвращает новый View, поэтому порядок важен.
+Превью в Xcode — макрос `#Preview { ContentView() }`: изменения видны сразу, без запуска симулятора.
+```code
+import SwiftUI
+
+struct Course {
+    let title: String
+    let done: Int
+    let total: Int
+    var progress: Double { Double(done) / Double(total) }
+}
+
+struct CourseCard: View {
+    let course: Course
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(course.title).font(.headline)
+            ProgressView(value: course.progress)
+            HStack {
+                Text("\(course.done) из \(course.total) уроков")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Image(systemName: course.progress == 1 ? "checkmark.seal.fill" : "chevron.right")
+            }
+        }
+        .padding()
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16))
+        .padding(.horizontal)
+    }
+}
+
+#Preview {
+    CourseCard(course: Course(title: "Swift", done: 3, total: 8))
+}
+```
+! View — структура, `body` описывает, что показать
+! Порядок модификаторов меняет результат
+! Иконки — SF Symbols через `Image(systemName:)`
+? mc Какой стек располагает элементы горизонтально?
++ HStack
+- VStack
+- ZStack
+- LazyVStack
+= H — horizontal.
+? mc Почему `.padding().background(.blue)` выглядит иначе, чем `.background(.blue).padding()`?
++ Модификаторы применяются по порядку: в первом случае фон покрывает и отступы
+- Это одно и то же
+- Второй вариант не компилируется
+- background всегда на весь экран
+= Каждый модификатор оборачивает предыдущий View.
+? fill Впишите протокол, который реализует любой экран SwiftUI.
+```code
+struct ProfileView: ___ { var body: some View { Text("Профиль") } }
+```
+> View
+= View требует свойство body.
+? out Что выведет код?
+```code
+struct Course { let done: Int; let total: Int; var progress: Double { Double(done) / Double(total) } }
+let c = Course(done: 2, total: 8)
+print(c.progress, Int(c.progress * 100))
+```
+> 0.25 25
+= Вычисляемое свойство progress.
+
+@lesson Состояние: @State и @Binding
+Данные, от которых зависит экран, хранят в `@State` — SwiftUI перерисует body при их изменении. `@State` принадлежит View и делается `private`.
+Дочернему View, который должен менять значение родителя, передают `@Binding` через знак доллара: `Toggle("Уведомления", isOn: $notifications)`. Так у значения один владелец.
+Поле ввода `TextField("Имя", text: $name)` тоже связывается биндингом; модификатор `.onChange(of:)` реагирует на изменение значения.
+```code
+import SwiftUI
+
+struct QuantityStepper: View {
+    @Binding var qty: Int                          // значение принадлежит родителю
+    var body: some View {
+        HStack {
+            Button("−") { qty = max(0, qty - 1) }
+            Text("\(qty)").monospacedDigit()
+            Button("+") { qty += 1 }
+        }
+    }
+}
+
+struct CartRow: View {
+    let title: String
+    let price: Int
+    @State private var qty = 1
+    @State private var giftWrap = false
+
+    var total: Int { qty * price + (giftWrap ? 500 : 0) }
+
+    var body: some View {
+        VStack(alignment: .leading) {
+            Text(title)
+            QuantityStepper(qty: $qty)
+            Toggle("Подарочная упаковка", isOn: $giftWrap)
+            Text("Итого: \(total) ₸").bold()
+        }
+        .padding()
+    }
+}
+```
+! `@State` — для простого локального состояния, всегда `private`
+! `$value` передаёт биндинг — дочерний View сможет менять значение
+! Вычисляемые свойства пересчитываются при каждой перерисовке
+? mc Что произойдёт при изменении @State-свойства?
++ SwiftUI перерисует body этого View
+- Ничего
+- Приложение перезапустится
+- Значение сохранится на диск
+= Состояние — источник правды для интерфейса.
+? mc Как передать дочернему View возможность менять @State родителя?
++ Передать биндинг $value в его свойство @Binding
+- Передать копию значения
+- Сделать переменную глобальной
+- Через NotificationCenter
+= Биндинг ссылается на источник правды родителя.
+? out Что выведет код?
+```code
+var qty = 1
+let price = 2000
+var giftWrap = true
+qty = max(0, qty - 1)
+qty += 3
+print(qty * price + (giftWrap ? 500 : 0))
+```
+> 6500
+= Количество стало 3, плюс упаковка 500.
+? fill Впишите обёртку свойства для значения, принадлежащего родителю.
+```code
+@___ var isOn: Bool
+```
+> Binding
+= @Binding читает и меняет чужое состояние.
+
+@lesson Списки и навигация
+`List` показывает прокручиваемый список, элементы должны быть `Identifiable` (свойство `id`) или указывать `id: \.self`. Свайп для удаления добавляет `.onDelete`, подтягивание для обновления — `.refreshable`.
+Навигацию строит `NavigationStack`: `NavigationLink(value: item)` и `.navigationDestination(for: Item.self) { ... }` описывают переходы, `.navigationTitle` задаёт заголовок. Путь навигации можно хранить в состоянии и переходить программно.
+Модальные окна — `.sheet(isPresented:)`, предупреждения — `.alert`.
+```code
+import SwiftUI
+
+struct Lesson: Identifiable, Hashable {
+    let id: Int
+    let title: String
+}
+
+struct LessonsView: View {
+    @State private var lessons = [Lesson(id: 1, title: "Переменные"), Lesson(id: 2, title: "Функции")]
+    @State private var showAdd = false
+
+    var body: some View {
+        NavigationStack {
+            List {
+                ForEach(lessons) { lesson in
+                    NavigationLink(lesson.title, value: lesson)
+                }
+                .onDelete { lessons.remove(atOffsets: $0) }
+            }
+            .navigationTitle("Уроки")
+            .navigationDestination(for: Lesson.self) { lesson in
+                Text("Урок \(lesson.id): \(lesson.title)")
+            }
+            .toolbar { Button("Добавить") { showAdd = true } }
+            .sheet(isPresented: $showAdd) {
+                Text("Новый урок")
+            }
+        }
+    }
+}
+```
+! Элементы `List` и `ForEach` — `Identifiable` со стабильным `id`
+! `NavigationStack` + `navigationDestination(for:)` — современная навигация
+! Модальные экраны управляются булевым состоянием
+? mc Что требуется от элементов ForEach без явного id?
++ Они должны соответствовать Identifiable
+- Быть классами
+- Быть строками
+- Ничего
+= Стабильный id нужен для анимаций и обновлений.
+? mc Какой контейнер управляет переходами между экранами в современном SwiftUI?
++ NavigationStack
+- NavigationView в iOS 18 обязательно
+- TabView
+- ScrollView
+= NavigationView устарел.
+? fill Впишите модификатор, который показывает модальный экран.
+```code
+.___(isPresented: $showSettings) { SettingsView() }
+```
+> sheet
+= sheet показывает экран снизу поверх текущего.
+? out Что выведет код?
+```code
+struct Lesson: Identifiable { let id: Int; let title: String }
+var lessons = [Lesson(id: 1, title: "A"), Lesson(id: 2, title: "B"), Lesson(id: 3, title: "C")]
+lessons.remove(at: 1)
+print(lessons.map(\.title).joined(separator: ","))
+```
+> A,C
+= Удалён элемент с индексом 1.
+
+@lesson Observation и архитектура экрана
+Состояние, общее для нескольких экранов, хранят в классе модели с макросом `@Observable`: SwiftUI сам отслеживает, какие свойства читает View, и перерисовывает только нужное. Модель создают через `@State private var model = Model()` или передают через `.environment(model)`.
+Логику загрузки и действий держат в модели (подход MVVM): View вызывает `model.load()`, а показывает `model.state`. Асинхронную загрузку запускают модификатором `.task { await model.load() }` — он отменится, когда экран исчезнет.
+Код, меняющий интерфейс, выполняется на главном потоке — модели экрана помечают `@MainActor`.
+```code
+import SwiftUI
+import Observation
+
+@MainActor
+@Observable
+final class CoursesModel {
+    enum State { case loading, loaded([String]), failed(String) }
+    var state: State = .loading
+
+    func load() async {
+        state = .loading
+        do {
+            try await Task.sleep(for: .milliseconds(300))     // имитация сети
+            state = .loaded(["Swift", "SwiftUI", "SwiftData"])
+        } catch {
+            state = .failed("Не удалось загрузить")
+        }
+    }
+}
+
+struct CoursesView: View {
+    @State private var model = CoursesModel()
+    var body: some View {
+        Group {
+            switch model.state {
+            case .loading: ProgressView()
+            case .loaded(let titles): List(titles, id: \.self) { Text($0) }
+            case .failed(let msg): ContentUnavailableView(msg, systemImage: "wifi.slash")
+            }
+        }
+        .task { await model.load() }
+    }
+}
+```
+! `@Observable` — современная замена ObservableObject и @Published
+! `.task` для загрузки при появлении экрана, с автоматической отменой
+! Модели интерфейса — `@MainActor`
+? mc Чем `.task { }` лучше запуска Task в onAppear?
++ Задача автоматически отменяется, когда View исчезает
+- Работает без async
+- Быстрее загружает данные
+- Ничем
+= Нет утечек и лишней работы после ухода с экрана.
+? mc Что делает макрос @Observable у класса модели?
++ Позволяет SwiftUI отслеживать чтение свойств и перерисовывать зависимые View
+- Сохраняет класс в базу
+- Делает класс потокобезопасным
+- Превращает класс в структуру
+= Observation отслеживает доступ к свойствам.
+? fill Впишите атрибут, который гарантирует выполнение кода модели на главном потоке.
+```code
+@___
+@Observable final class ProfileModel {}
+```
+> MainActor
+= Обновления интерфейса — только на главном потоке.
+? out Что выведет код?
+```code
+enum State { case loading, loaded([String]), failed(String) }
+func render(_ s: State) -> String {
+    switch s {
+    case .loading: return "..."
+    case .loaded(let items): return "\(items.count) курса"
+    case .failed(let m): return m
+    }
+}
+print(render(.loaded(["Swift", "SwiftUI", "SwiftData"])))
+```
+> 3 курса
+= switch по enum с ассоциированным значением.
+
+@exam
+? mc Где хранить простое локальное состояние экрана?
++ В @State private var
+- В глобальной переменной
+- В UserDefaults при каждом изменении
+- В @Binding
+= @State принадлежит самому View.
+? fill Впишите знак, создающий биндинг из @State.
+```code
+TextField("Имя", text: ___name)
+```
+> $
+= $name — биндинг к свойству name.
+? out Что выведет код?
+```code
+let items = ["b", "a", "c"]
+print(items.sorted().first!, items.count)
+```
+> a 3
+= Первый после сортировки — a.
+? mc Какой модификатор запускает асинхронную загрузку при появлении экрана?
++ .task
+- .onTapGesture
+- .padding
+- .sheet
+= .task поддерживает async и отмену.
+? mc Чем `VStack` отличается от `LazyVStack`?
++ LazyVStack создаёт элементы по мере прокрутки, VStack — все сразу
+- Ничем
+- LazyVStack горизонтальный
+- VStack нельзя прокручивать
+= Для длинных списков — ленивые стеки или List.
+? mc Почему модель экрана помечают @MainActor?
++ Её свойства читает интерфейс, а изменения UI допустимы только на главном потоке
+- Чтобы ускорить сеть
+- Для тестов
+- Это требование App Store
+= Компилятор проверит доступ из других потоков.
+? out Что выведет код?
+```code
+var count = 0
+let increment = { count += 1 }
+increment(); increment(); increment()
+print(count)
+```
+> 3
+= Замыкание захватывает и меняет переменную.
+? fill Впишите контейнер навигации SwiftUI.
+```code
+___ { List { ... }.navigationTitle("Курсы") }
+```
+> NavigationStack
+= NavigationStack управляет стеком экранов.

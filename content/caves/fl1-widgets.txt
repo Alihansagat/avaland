@@ -1,0 +1,339 @@
+@lang id=flwidgets name=Виджеты Flutter land=Пещера виджетов color=#02569b cave=dart track=flutter step=1
+@about Интерфейсы на Flutter: виджеты, вёрстка, StatelessWidget и StatefulWidget, списки, формы и тема.
+@why Первая, потому что во Flutter всё — виджет: экран, кнопка, отступ. Управление состоянием и навигация из следующих пещер работают с этими виджетами.
+
+@lesson Виджеты и вёрстка
+Интерфейс Flutter — дерево виджетов. `StatelessWidget` описывает часть экрана в методе `build`, который возвращает другие виджеты. Приложение начинается с `runApp(MyApp())` и `MaterialApp`.
+Вёрстку собирают из `Column` (вертикально), `Row` (горизонтально), `Stack` (наложение), `Padding`, `SizedBox`, `Container`, `Expanded`. Выравнивание — `mainAxisAlignment` и `crossAxisAlignment`.
+Виджеты неизменяемы: поля помечают `final`, а конструкторы — `const`, чтобы Flutter не пересоздавал одинаковые части дерева.
+```code
+import 'package:flutter/material.dart';
+
+void main() => runApp(const AvalandApp());
+
+class AvalandApp extends StatelessWidget {
+  const AvalandApp({super.key});
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      theme: ThemeData(colorSchemeSeed: Colors.teal, useMaterial3: true),
+      home: const Scaffold(body: Center(child: CourseCard(title: 'Dart', done: 3, total: 8))),
+    );
+  }
+}
+
+class CourseCard extends StatelessWidget {
+  const CourseCard({super.key, required this.title, required this.done, required this.total});
+  final String title;
+  final int done;
+  final int total;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      margin: const EdgeInsets.all(16),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(title, style: Theme.of(context).textTheme.titleLarge),
+            const SizedBox(height: 8),
+            LinearProgressIndicator(value: done / total),
+            Text('$done из $total уроков'),
+          ],
+        ),
+      ),
+    );
+  }
+}
+```
+! `const` конструкторы — меньше перестроений дерева
+! `Expanded` внутри `Row`/`Column` отдаёт оставшееся место
+! Цвета и шрифты — из `Theme.of(context)`
+? mc Какой виджет располагает детей вертикально?
++ Column
+- Row
+- Stack
+- Wrap
+= Row — горизонтально, Stack — наложением.
+? mc Зачем ставить `const` перед виджетами без изменяемых данных?
++ Flutter переиспользует такие виджеты и не перестраивает их лишний раз
+- Чтобы виджет нельзя было увидеть
+- Для анимаций
+- Это ошибка
+= const-виджеты создаются один раз на этапе компиляции.
+? out Что выведет код?
+```code
+void main() {
+  const done = 3, total = 8;
+  print('$done из $total: ${(done / total * 100).round()}%');
+}
+```
+> 3 из 8: 38%
+= 37,5 округляется до 38.
+? fill Впишите метод, который описывает интерфейс виджета.
+```code
+@override
+Widget ___(BuildContext context) => const Text('Привет');
+```
+> build
+= build возвращает дерево дочерних виджетов.
+
+@lesson StatefulWidget и setState
+Если часть экрана меняется сама (счётчик, раскрытый список, текст поля), используют `StatefulWidget`: он хранит изменяемые поля в объекте `State`. Изменение оборачивают в `setState(() { ... })` — Flutter вызовет `build` заново.
+Методы жизненного цикла: `initState` — один раз при создании (подписки, контроллеры), `dispose` — при удалении (обязательно освобождать контроллеры и подписки).
+Локальное состояние — хороший выбор для мелочей внутри одного виджета; данные, нужные многим экранам, выносят в менеджер состояния (следующая пещера).
+```code
+import 'package:flutter/material.dart';
+
+class QuantityPicker extends StatefulWidget {
+  const QuantityPicker({super.key, required this.price});
+  final int price;
+  @override
+  State<QuantityPicker> createState() => _QuantityPickerState();
+}
+
+class _QuantityPickerState extends State<QuantityPicker> {
+  int qty = 1;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        IconButton(icon: const Icon(Icons.remove), onPressed: qty > 0 ? () => setState(() => qty--) : null),
+        Text('$qty'),
+        IconButton(icon: const Icon(Icons.add), onPressed: () => setState(() => qty++)),
+        const Spacer(),
+        Text('${qty * widget.price} ₸', style: const TextStyle(fontWeight: FontWeight.bold)),
+      ],
+    );
+  }
+}
+```
+! Меняйте состояние только внутри `setState`
+! Освобождайте контроллеры в `dispose`
+! Параметры виджета из State доступны через `widget.`
+? mc Что делает setState?
++ Сообщает Flutter, что состояние изменилось, и вызывает build заново
+- Сохраняет данные на диск
+- Создаёт новый экран
+- Отправляет запрос
+= Без setState изменение не отобразится.
+? mc Где освобождать TextEditingController?
++ В методе dispose
+- В build
+- В initState
+- Нигде, он освобождается сам
+= Иначе утечка памяти.
+? fill Впишите метод State, который вызывается один раз при создании.
+```code
+@override
+void ___() { super.___(); controller = TextEditingController(); }
+```
+> initState
+= initState — для инициализации контроллеров и подписок.
+? out Что выведет код?
+```code
+void main() {
+  var qty = 1;
+  void dec() { if (qty > 0) qty--; }
+  dec(); dec(); qty += 2;
+  print(qty * 1500);
+}
+```
+> 3000
+= qty не уходит ниже нуля, затем становится 2.
+
+@lesson Списки и формы
+`ListView.builder` создаёт элементы по мере прокрутки — подходит для длинных списков. `itemCount` и `itemBuilder` описывают, сколько элементов и как нарисовать каждый.
+Формы: `Form` с `GlobalKey<FormState>`, поля `TextFormField` с `validator`, проверка — `formKey.currentState!.validate()`. Текст поля читают через `TextEditingController`.
+Клавиатуру настраивают `keyboardType: TextInputType.emailAddress`, скрытие пароля — `obscureText: true`.
+```code
+import 'package:flutter/material.dart';
+
+class SignupForm extends StatefulWidget {
+  const SignupForm({super.key});
+  @override
+  State<SignupForm> createState() => _SignupFormState();
+}
+
+class _SignupFormState extends State<SignupForm> {
+  final _formKey = GlobalKey<FormState>();
+  final _email = TextEditingController();
+
+  @override
+  void dispose() {
+    _email.dispose();
+    super.dispose();
+  }
+
+  String? _validateEmail(String? v) =>
+      (v != null && RegExp(r'^\S+@\S+\.\S+$').hasMatch(v)) ? null : 'Введите почту';
+
+  @override
+  Widget build(BuildContext context) {
+    return Form(
+      key: _formKey,
+      child: Column(children: [
+        TextFormField(controller: _email, validator: _validateEmail, keyboardType: TextInputType.emailAddress),
+        FilledButton(
+          onPressed: () {
+            if (_formKey.currentState!.validate()) {
+              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Привет, ${_email.text}')));
+            }
+          },
+          child: const Text('Зарегистрироваться'),
+        ),
+        Expanded(child: ListView.builder(itemCount: 100, itemBuilder: (_, i) => ListTile(title: Text('Урок ${i + 1}')))),
+      ]),
+    );
+  }
+}
+```
+! Длинные списки — `ListView.builder`
+! `validator` возвращает текст ошибки или `null`, если всё верно
+! Контроллеры полей освобождайте в `dispose`
+? mc Почему для 1000 элементов используют ListView.builder?
++ Он строит только видимые элементы, экономя память и время
+- Обычный ListView не прокручивается
+- builder сортирует элементы
+- Это одно и то же
+= Ленивая отрисовка.
+? out Что выведет код?
+```code
+void main() {
+  String? validate(String? v) => (v != null && RegExp(r'^\S+@\S+\.\S+$').hasMatch(v)) ? null : 'Введите почту';
+  print('${validate('ada@mail.kz')} ${validate('ada@')}');
+}
+```
+> null Введите почту
+= Корректная почта даёт null (ошибки нет).
+? fill Впишите параметр поля, скрывающий вводимый пароль.
+```code
+TextFormField(___: true)
+```
+> obscureText
+= obscureText прячет символы.
+? mc Что должен вернуть validator, если значение корректно?
++ null
+- true
+- Пустую строку
+- 'ok'
+= Любая строка считается текстом ошибки.
+
+@lesson Тема, адаптивность и ресурсы
+`ThemeData` с `colorSchemeSeed` генерирует цветовую схему Material 3; `darkTheme` и `themeMode` включают тёмную тему. Цвета в виджетах берут из `Theme.of(context).colorScheme`.
+Адаптивная вёрстка: `MediaQuery.sizeOf(context)` даёт размер экрана, `LayoutBuilder` — размер родителя; на широком экране показывают сетку или две колонки.
+Картинки и шрифты объявляют в `pubspec.yaml` в разделе `assets`/`fonts`, зависимости добавляют `flutter pub add`. Сборки: `flutter run`, `flutter build apk`, `flutter build ipa`, `flutter build web`.
+```code
+import 'package:flutter/material.dart';
+
+class CoursesGrid extends StatelessWidget {
+  const CoursesGrid({super.key, required this.titles});
+  final List<String> titles;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(builder: (context, constraints) {
+      final columns = constraints.maxWidth > 900 ? 3 : constraints.maxWidth > 600 ? 2 : 1;
+      return GridView.count(
+        crossAxisCount: columns,
+        childAspectRatio: 3,
+        children: [for (final t in titles) Card(child: Center(child: Text(t)))],
+      );
+    });
+  }
+}
+
+// MaterialApp(
+//   theme: ThemeData(colorSchemeSeed: Colors.teal),
+//   darkTheme: ThemeData(colorSchemeSeed: Colors.teal, brightness: Brightness.dark),
+//   themeMode: ThemeMode.system,
+// )
+```
+! Цвета — из `colorScheme`, тогда тёмная тема работает сама
+! `LayoutBuilder` — вёрстка по размеру родителя
+! Один код Flutter собирается под Android, iOS, веб и десктоп
+? mc Как сделать сетку из 1, 2 или 3 колонок в зависимости от ширины?
++ LayoutBuilder и выбор crossAxisCount по constraints.maxWidth
+- Три разных приложения
+- Только Column
+- Нельзя
+= Адаптивная вёрстка по ширине родителя.
+? out Что выведет код?
+```code
+int columns(double w) => w > 900 ? 3 : w > 600 ? 2 : 1;
+void main() => print([375.0, 768.0, 1280.0].map(columns).toList());
+```
+> [1, 2, 3]
+= Телефон, планшет, десктоп.
+? fill Впишите файл, где объявляют зависимости и ассеты Flutter-проекта.
+```code
+pubspec.___
+```
+> yaml
+= pubspec.yaml — манифест пакета Dart.
+? mc Какая команда собирает веб-версию Flutter?
++ flutter build web
+- flutter run apk
+- dart compile exe
+- flutter web
+= Результат — в build/web.
+
+@exam
+? mc Когда нужен StatefulWidget вместо StatelessWidget?
++ Когда виджет хранит изменяемое состояние, которое меняет его вид
+- Всегда
+- Для текста
+- Никогда
+= Неизменяемые данные — StatelessWidget.
+? fill Впишите функцию, запускающую приложение Flutter.
+```code
+void main() => ___(const MyApp());
+```
+> runApp
+= runApp делает виджет корнем дерева.
+? out Что выведет код?
+```code
+void main() {
+  final titles = ['Dart', 'Flutter', 'Riverpod'];
+  print([for (final t in titles) if (t.length > 4) t.toUpperCase()]);
+}
+```
+> [FLUTTER, RIVERPOD]
+= collection-for и collection-if внутри литерала списка.
+? mc Что произойдёт, если изменить поле State без setState?
++ Значение изменится, но экран не обновится
+- Приложение упадёт
+- Flutter сам заметит изменение
+- Поле не изменится
+= setState запускает перестроение.
+? mc Где брать цвета для виджетов, чтобы работала тёмная тема?
++ Theme.of(context).colorScheme
+- Писать Colors.white вручную
+- Из CSS
+- Из pubspec.yaml
+= Тема меняет цвета централизованно.
+? out Что выведет код?
+```code
+void main() {
+  final items = List.generate(5, (i) => 'Урок ${i + 1}');
+  print('${items.first} ${items.last} ${items.length}');
+}
+```
+> Урок 1 Урок 5 5
+= List.generate строит список по индексам.
+? mc Какой виджет показывает уведомление внизу экрана?
++ SnackBar через ScaffoldMessenger
+- AlertDialog
+- AppBar
+- Drawer
+= SnackBar — короткое сообщение.
+? fill Впишите виджет, который отдаёт ребёнку оставшееся место в Row.
+```code
+Row(children: [Icon(Icons.star), ___(child: Text('Длинный текст'))])
+```
+> Expanded
+= Expanded растягивает ребёнка.

@@ -1,0 +1,302 @@
+@lang id=swiftdata name=SwiftData и публикация land=Пещера SwiftData color=#ff9f0a cave=swift track=ios step=3
+@about Хранение данных на iPhone и путь в App Store: SwiftData, настройки, офлайн-режим, TestFlight и проверка Apple.
+@why Последняя, потому что приложение с экранами и сетью должно сохранять данные между запусками и дойти до пользователей. Публикация в App Store — финальный навык iOS-разработчика.
+
+@lesson Модели SwiftData
+SwiftData хранит объекты в локальной базе: класс с макросом `@Model` становится сущностью, его свойства — полями. Контейнер подключают модификатором `.modelContainer(for: Note.self)` у корневого View.
+Объекты добавляют через `modelContext.insert(note)`, удаляют — `modelContext.delete(note)`. Изменения сохраняются автоматически, явный `try modelContext.save()` нужен, когда важно сохранить немедленно.
+Связи описывают свойствами-ссылками и массивами; `@Relationship(deleteRule: .cascade)` удалит заметки вместе с папкой.
+```code
+import SwiftUI
+import SwiftData
+
+@Model
+final class Folder {
+    var name: String
+    @Relationship(deleteRule: .cascade, inverse: \Note.folder) var notes: [Note] = []
+    init(name: String) { self.name = name }
+}
+
+@Model
+final class Note {
+    var text: String
+    var createdAt: Date
+    var pinned: Bool
+    var folder: Folder?
+    init(text: String, pinned: Bool = false) {
+        self.text = text
+        self.createdAt = .now
+        self.pinned = pinned
+    }
+}
+
+@main
+struct NotesApp: App {
+    var body: some Scene {
+        WindowGroup { NotesView() }
+            .modelContainer(for: [Folder.self, Note.self])
+    }
+}
+```
+! `@Model` — класс, а не структура
+! Контейнер подключают один раз у корня приложения
+! Каскадное удаление — для зависимых объектов
+? mc Что делает макрос @Model?
++ Делает класс сущностью SwiftData, которая хранится в базе на устройстве
+- Создаёт экран
+- Делает класс Codable для сети
+- Генерирует тесты
+= SwiftData — современная замена Core Data.
+? mc Что означает `deleteRule: .cascade` у связи папки с заметками?
++ При удалении папки её заметки тоже удалятся
+- Заметки нельзя удалить
+- Папку нельзя удалить, пока есть заметки
+- Ничего
+= Каскад предотвращает «осиротевшие» объекты.
+? fill Впишите модификатор, подключающий хранилище SwiftData.
+```code
+WindowGroup { RootView() }.___(for: Note.self)
+```
+> modelContainer
+= modelContainer создаёт контейнер для моделей.
+? out Что выведет код?
+```code
+final class Folder { var notes: [String] = [] }
+let f = Folder()
+f.notes.append("a"); f.notes.append("b")
+let alias = f
+alias.notes.removeAll()
+print(f.notes.count)
+```
+> 0
+= Класс — ссылочный тип: alias и f указывают на один объект. Поэтому модели SwiftData — классы.
+
+@lesson Запросы @Query
+Свойство `@Query` во View загружает объекты и автоматически обновляет экран при изменениях: `@Query(sort: \Note.createdAt, order: .reverse) var notes: [Note]`.
+Фильтр — макрос `#Predicate`: `@Query(filter: #Predicate<Note> { $0.pinned })`. Для динамических фильтров (поиск по тексту) создают `@Query` в инициализаторе дочернего View с параметрами.
+`modelContext` берут из окружения: `@Environment(\.modelContext) private var context` — через него добавляют и удаляют объекты.
+```code
+import SwiftUI
+import SwiftData
+
+struct NotesView: View {
+    @Environment(\.modelContext) private var context
+    @Query(sort: [SortDescriptor(\Note.pinned, order: .reverse), SortDescriptor(\Note.createdAt, order: .reverse)])
+    private var notes: [Note]
+    @State private var draft = ""
+
+    var body: some View {
+        NavigationStack {
+            List {
+                ForEach(notes) { note in
+                    Label(note.text, systemImage: note.pinned ? "pin.fill" : "note.text")
+                }
+                .onDelete { offsets in offsets.map { notes[$0] }.forEach(context.delete) }
+            }
+            .safeAreaInset(edge: .bottom) {
+                HStack {
+                    TextField("Новая заметка", text: $draft).textFieldStyle(.roundedBorder)
+                    Button("Добавить") {
+                        context.insert(Note(text: draft))
+                        draft = ""
+                    }.disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty)
+                }.padding()
+            }
+            .navigationTitle("Заметки \(notes.count)")
+        }
+    }
+}
+```
+! `@Query` сам обновляет экран при изменениях в базе
+! Фильтры — через `#Predicate`, сортировка — через `SortDescriptor`
+! Изменения делают через `modelContext` из окружения
+? mc Что делает свойство с @Query?
++ Загружает объекты SwiftData и обновляет View при их изменении
+- Выполняет сетевой запрос
+- Создаёт таблицу
+- Сохраняет черновик
+= @Query — живой запрос к базе.
+? out Что выведет код?
+```code
+struct Note { let text: String; let pinned: Bool; let created: Int }
+let notes = [Note(text: "a", pinned: false, created: 3), Note(text: "b", pinned: true, created: 1), Note(text: "c", pinned: false, created: 5)]
+let sorted = notes.sorted { ($0.pinned ? 1 : 0, $0.created) > ($1.pinned ? 1 : 0, $1.created) }
+print(sorted.map(\.text).joined())
+```
+> bca
+= Сначала закреплённые, затем по убыванию даты.
+? fill Впишите макрос фильтра SwiftData.
+```code
+@Query(filter: #___<Note> { $0.pinned }) var pinned: [Note]
+```
+> Predicate
+= #Predicate описывает условие выборки.
+? mc Как получить modelContext внутри View?
++ @Environment(\.modelContext) private var context
+- ModelContext() в body
+- Через синглтон
+- Из UserDefaults
+= Контекст передаётся через окружение от контейнера.
+
+@lesson Настройки, Keychain и офлайн
+Мелкие настройки (тема, выбранный язык) хранят в UserDefaults через `@AppStorage("theme") var theme = "system"` — значение переживёт перезапуск и обновит интерфейс.
+Секреты (токены, пароли) — только в Keychain. Большие файлы — в папке документов или кэша приложения.
+Офлайн-подход: экран показывает данные из SwiftData, а сеть обновляет базу в фоне. При ошибке сети данные остаются на экране, а пользователь видит ненавязчивое сообщение.
+```code
+import SwiftUI
+
+struct SettingsView: View {
+    @AppStorage("dailyGoal") private var dailyGoal = 50
+    @AppStorage("darkMode") private var darkMode = false
+
+    var body: some View {
+        Form {
+            Stepper("Цель на день: \(dailyGoal) XP", value: $dailyGoal, in: 10...200, step: 10)
+            Toggle("Тёмная тема", isOn: $darkMode)
+        }
+        .preferredColorScheme(darkMode ? .dark : nil)
+    }
+}
+
+// синхронизация: сначала показываем кэш, потом обновляем
+// func refresh(context: ModelContext, api: CoursesAPI) async {
+//     do {
+//         let remote = try await api.courses()
+//         for title in remote where !existing.contains(title) { context.insert(Course(title: title)) }
+//     } catch {
+//         banner = "Нет связи — показаны сохранённые данные"
+//     }
+// }
+```
+! `@AppStorage` — для мелких настроек, не для секретов
+! Токены — в Keychain
+! База на устройстве — источник правды для экрана
+? mc Где хранить выбранную тему оформления?
++ В UserDefaults через @AppStorage
+- В Keychain
+- На сервере обязательно
+- В SwiftData с синхронизацией
+= Мелкие несекретные настройки — UserDefaults.
+? out Что выведет код?
+```code
+var goal = 50
+let range = 10...200
+goal = min(range.upperBound, goal + 160)
+print(goal, range.contains(goal))
+```
+> 200 true
+= Значение ограничено верхней границей, как у Stepper с диапазоном.
+? fill Впишите обёртку для значения из UserDefaults во View.
+```code
+@___("language") private var language = "ru"
+```
+> AppStorage
+= @AppStorage читает и пишет UserDefaults.
+? mc Что показать, если обновление из сети не удалось, но есть сохранённые данные?
++ Сохранённые данные и сообщение об ошибке связи
+- Пустой экран
+- Стереть кэш
+- Закрыть приложение
+= Офлайн-режим — данные доступны всегда.
+
+@lesson TestFlight и App Store
+Для публикации нужен Apple Developer Program ($99 в год). В App Store Connect создают карточку приложения, в Xcode выбирают «Any iOS Device» и делают Product → Archive → Distribute App → App Store Connect.
+TestFlight раздаёт сборки тестировщикам: внутренним — сразу, внешним (до 10 000 человек) — после короткой проверки Apple. Это лучший способ собрать отзывы до релиза.
+Перед отправкой на проверку заполняют описание, скриншоты, политику конфиденциальности, раздел App Privacy и возрастной рейтинг. Частые причины отказа: падения, неработающие ссылки, нет удаления аккаунта при наличии регистрации, вход через сторонние сервисы без «Войти через Apple».
+```code
+// Перед архивом проверьте:
+// 1. Bundle Identifier и версия (CFBundleShortVersionString) + номер сборки (CFBundleVersion)
+// 2. Иконка 1024×1024 без прозрачности
+// 3. Info.plist: описания разрешений, например
+//    NSCameraUsageDescription = "Камера нужна, чтобы сфотографировать задачу"
+// 4. PrivacyInfo.xcprivacy — манифест приватности
+// 5. Release-сборка без отладочных экранов
+
+// Номер сборки должен расти с каждой загрузкой:
+let version = "1.2.0"
+let build = 37
+print("\(version) (\(build + 1))")      // 1.2.0 (38)
+```
+! Каждая загрузка — новый номер сборки
+! TestFlight до релиза — обязательно
+! Если есть регистрация — нужно удаление аккаунта в приложении
+? mc Сколько стоит Apple Developer Program?
++ $99 в год
+- $25 один раз
+- Бесплатно
+- $299 в месяц
+= Для организаций и физлиц цена одинаковая.
+? mc Что нужно сделать перед повторной загрузкой сборки той же версии в App Store Connect?
++ Увеличить номер сборки (CFBundleVersion)
+- Поменять Bundle Identifier
+- Удалить приложение из App Store Connect
+- Ничего
+= Номер сборки должен быть уникальным и расти.
+? fill Впишите сервис Apple для бета-тестирования.
+```code
+Сборки раздают тестировщикам через ___
+```
+> TestFlight
+= TestFlight позволяет установить бету по приглашению.
+? out Что выведет код?
+```code
+let parts = "1.9.3".split(separator: ".").compactMap { Int($0) }
+let next = [parts[0], parts[1] + 1, 0].map(String.init).joined(separator: ".")
+print(next)
+```
+> 1.10.0
+= Минорная версия увеличена, патч сброшен.
+
+@exam
+? mc Чем SwiftData отличается от @AppStorage?
++ SwiftData — база для объектов и связей, @AppStorage — простые настройки в UserDefaults
+- Ничем
+- @AppStorage шифрует данные
+- SwiftData для сети
+= Разные задачи хранения.
+? fill Впишите метод контекста для удаления объекта.
+```code
+context.___(note)
+```
+> delete
+= insert добавляет, delete удаляет.
+? out Что выведет код?
+```code
+var notes = ["a", "b", "c"]
+notes.removeAll { $0 == "b" }
+notes.insert("z", at: 0)
+print(notes.joined(separator: "-"))
+```
+> z-a-c
+= Удалён b, z вставлен в начало.
+? mc Приложение предлагает вход через Google. Что требует Apple?
++ Добавить «Войти через Apple» как равноценный вариант
+- Удалить вход через Google
+- Ничего
+- Сделать вход платным
+= Правило App Store для сторонних способов входа.
+? mc Где хранить пароль пользователя, если приложение его запоминает?
++ В Keychain
+- В @AppStorage
+- В SwiftData открытым текстом
+- В файле Documents
+= Keychain — системное защищённое хранилище.
+? out Что выведет код?
+```code
+let builds = [35, 36, 37]
+print((builds.max() ?? 0) + 1)
+```
+> 38
+= Следующая сборка — на единицу больше максимальной.
+? mc Почему модели SwiftData — классы, а не структуры?
++ База отслеживает изменения одного и того же объекта по ссылке
+- Структуры медленнее
+- Swift запрещает структуры
+- Это требование SwiftUI
+= Ссылочная семантика нужна для отслеживания изменений.
+? fill Впишите свойство-обёртку для живого запроса к SwiftData во View.
+```code
+@___ private var notes: [Note]
+```
+> Query
+= @Query обновляет View при изменении данных.

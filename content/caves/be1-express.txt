@@ -1,0 +1,306 @@
+@lang id=express name=Node.js и Express land=Пещера Express color=#5fa04e cave=ts track=node step=1
+@about Сервер на TypeScript: Node.js, Express, REST API, middleware, валидация и обработка ошибок.
+@why Первая, потому что Express — минимальный каркас HTTP-сервера: на нём видно, как устроены маршруты, запросы и ответы. Prisma и NestJS добавляют слои поверх этих основ.
+
+@lesson Node.js и первый сервер
+Node.js — среда, которая выполняет JavaScript и TypeScript вне браузера: на сервере, в скриптах, в CLI. Пакеты ставят через npm: `npm init -y`, `npm i express`, типы — `npm i -D typescript @types/express tsx`.
+Node однопоточный, но не блокируется на вводе-выводе: пока база отвечает, он обслуживает другие запросы. Поэтому код с сетью и файлами пишут асинхронно через `async/await`, а тяжёлые вычисления выносят из основного потока.
+Express задаёт маршруты: `app.get(path, handler)`. Обработчик получает `req` (запрос: параметры, тело, заголовки) и `res` (ответ: `res.json`, `res.status`).
+```code
+// src/server.ts — запуск: npx tsx src/server.ts
+import express from "express";
+
+const app = express();
+app.use(express.json());              // разбирать JSON в req.body
+
+type Book = { id: number; title: string; year: number };
+const books: Book[] = [{ id: 1, title: "Чистый код", year: 2008 }];
+
+app.get("/api/books", (req, res) => {
+  const minYear = Number(req.query.minYear ?? 0);
+  res.json(books.filter(b => b.year >= minYear));
+});
+
+app.get("/api/books/:id", (req, res) => {
+  const book = books.find(b => b.id === Number(req.params.id));
+  if (!book) return res.status(404).json({ error: "Книга не найдена" });
+  res.json(book);
+});
+
+app.listen(3000, () => console.log("http://localhost:3000"));
+```
+! `req.params` — части пути (`/books/:id`), `req.query` — после `?`, `req.body` — тело запроса
+! Параметры из URL всегда строки — приводите к числу явно
+! Не блокируйте поток тяжёлыми синхронными циклами: сервер перестанет отвечать всем
+? mc Где Express хранит `42` из запроса `GET /api/books/42`?
++ req.params.id
+- req.query.id
+- req.body.id
+- res.id
+= Сегмент пути с двоеточием попадает в req.params.
+? mc Почему Node.js хорошо держит много одновременных запросов?
++ Ввод-вывод неблокирующий: пока ждём базу или сеть, обрабатываются другие запросы
+- Он многопоточный по умолчанию
+- Он компилируется в машинный код заранее
+- Он кэширует все ответы
+= Цикл событий позволяет одному потоку обслуживать тысячи соединений.
+? out Что выведет код?
+```code
+const query: Record<string, string> = { minYear: "2010" };
+const books = [{ y: 2008 }, { y: 2015 }, { y: 2020 }];
+const min = Number(query.minYear ?? 0);
+console.log(books.filter(b => b.y >= min).length, typeof query.minYear);
+```
+> 2 string
+= Параметры запроса приходят строками; после Number фильтр оставляет 2015 и 2020.
+? fill Впишите middleware Express, которое разбирает JSON-тело запроса.
+```code
+app.use(express.___());
+```
+> json
+= Без него req.body будет undefined.
+
+@lesson REST API и статус-коды
+REST описывает ресурсы существительными и действия HTTP-методами: `GET /books` — список, `GET /books/1` — одна, `POST /books` — создать, `PATCH /books/1` — изменить часть, `PUT` — заменить, `DELETE /books/1` — удалить.
+Статус-коды сообщают результат: 200 OK, 201 Created (после POST), 204 No Content (после DELETE), 400 Bad Request (неверные данные), 401 (не вошёл), 403 (нет прав), 404 (нет ресурса), 409 (конфликт), 500 (ошибка сервера).
+Ошибки отдают в едином формате, например `{ "error": "..." }`, а списки — с пагинацией: `?page=2&limit=20`, чтобы не выгружать всю таблицу.
+```code
+let nextId = 2;
+const books = new Map<number, { id: number; title: string }>([[1, { id: 1, title: "SICP" }]]);
+
+app.post("/api/books", (req, res) => {
+  const title = String(req.body?.title ?? "").trim();
+  if (!title) return res.status(400).json({ error: "title обязателен" });
+  const book = { id: nextId++, title };
+  books.set(book.id, book);
+  res.status(201).location(`/api/books/${book.id}`).json(book);
+});
+
+app.delete("/api/books/:id", (req, res) => {
+  const ok = books.delete(Number(req.params.id));
+  res.status(ok ? 204 : 404).end();
+});
+
+app.get("/api/books", (req, res) => {
+  const page = Math.max(1, Number(req.query.page ?? 1));
+  const limit = Math.min(100, Number(req.query.limit ?? 20));
+  const all = [...books.values()];
+  res.json({ items: all.slice((page - 1) * limit, page * limit), total: all.length, page });
+});
+```
+! После создания — 201, после удаления — 204 без тела
+! 4xx — ошибка клиента, 5xx — ошибка сервера
+! Ограничивайте `limit`, чтобы никто не запросил миллион строк
+? mc Какой код вернуть, если клиент прислал пустое обязательное поле?
++ 400 Bad Request
+- 200 OK
+- 404 Not Found
+- 500 Internal Server Error
+= Ошибка в данных запроса — 400.
+? mc Пользователь вошёл, но пытается удалить чужой пост. Какой код?
++ 403 Forbidden
+- 401 Unauthorized
+- 404 Not Found
+- 201 Created
+= 401 — не аутентифицирован, 403 — аутентифицирован, но нет прав.
+? out Что выведет код?
+```code
+const all = Array.from({ length: 45 }, (_, i) => i + 1);
+const page = 3, limit = 20;
+const items = all.slice((page - 1) * limit, page * limit);
+console.log(items.length, items[0]);
+```
+> 5 41
+= Третья страница по 20: элементы с 41 по 45.
+? fill Впишите HTTP-метод для частичного изменения ресурса.
+```code
+app.___("/api/books/:id", update);
+```
+> patch
+= PATCH меняет только переданные поля.
+
+@lesson Middleware, валидация и ошибки
+Middleware — функция `(req, res, next)`, которая выполняется до обработчика: логирование, проверка токена, CORS, лимит запросов. Вызов `next()` передаёт управление дальше, ответ без `next()` прерывает цепочку.
+Входные данные проверяют схемой, например библиотекой Zod: она одновременно валидирует и даёт TypeScript-тип. Никогда не доверяйте `req.body`.
+Ошибки собирают в одном обработчике с четырьмя аргументами `(err, req, res, next)`, который ставят последним: он логирует детали и отдаёт клиенту аккуратный ответ без стека.
+```code
+import { z } from "zod";
+import type { Request, Response, NextFunction } from "express";
+
+const BookSchema = z.object({
+  title: z.string().min(1).max(200),
+  year: z.number().int().min(1450).max(2100),
+});
+type BookInput = z.infer<typeof BookSchema>;
+
+function logger(req: Request, res: Response, next: NextFunction) {
+  const t = Date.now();
+  res.on("finish", () => console.log(req.method, req.url, res.statusCode, `${Date.now() - t}ms`));
+  next();
+}
+
+function requireApiKey(req: Request, res: Response, next: NextFunction) {
+  if (req.header("x-api-key") !== process.env.API_KEY) return res.status(401).json({ error: "нужен ключ" });
+  next();
+}
+
+app.use(logger);
+app.post("/api/books", requireApiKey, (req, res) => {
+  const parsed = BookSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message });
+  const book: BookInput = parsed.data;
+  res.status(201).json(book);
+});
+
+app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
+  console.error(err);
+  res.status(500).json({ error: "Внутренняя ошибка" });
+});
+```
+! Обработчик ошибок — последним и с четырьмя аргументами
+! Валидируйте всё, что приходит от клиента
+! Не отдавайте стек ошибки клиенту в продакшене
+? mc Что делает `next()` в middleware?
++ Передаёт запрос следующему middleware или обработчику
+- Завершает сервер
+- Отправляет ответ 200
+- Перезапускает запрос
+= Без next() и без ответа запрос зависнет.
+? out Что выведет код?
+```code
+const order: string[] = [];
+const mw = [
+  (next: () => void) => { order.push("log"); next(); },
+  (next: () => void) => { order.push("auth"); next(); },
+  (next: () => void) => { order.push("handler"); },
+];
+const run = (i: number): void => { if (i < mw.length) mw[i](() => run(i + 1)); };
+run(0);
+console.log(order.join(" > "));
+```
+> log > auth > handler
+= Цепочка middleware выполняется по порядку через next().
+? mc Зачем валидировать `req.body` схемой?
++ Чтобы отклонить неверные или вредные данные до бизнес-логики и базы
+- Чтобы ускорить JSON.parse
+- Это нужно только для GET
+- TypeScript проверит данные сам во время выполнения
+= Типы TypeScript исчезают при компиляции и не проверяют реальный ввод.
+? fill Впишите метод Zod, который проверяет данные без исключения.
+```code
+const r = Schema.___(req.body);
+```
+> safeParse
+= safeParse возвращает { success, data | error }.
+
+@lesson Аутентификация, конфигурация и деплой
+Пароли хранят только как хеш: `bcrypt.hash(password, 12)`, проверяют через `bcrypt.compare`. После входа сервер выдаёт JWT или сессионную cookie (`httpOnly`, `secure`, `sameSite`), а middleware проверяет её на каждом запросе.
+Настройки берут из переменных окружения: порт, адрес базы, секрет для JWT. Локально — файл `.env` (не коммитится), в проде — настройки хостинга. Проверяют их при старте, чтобы сервер не запустился без секрета.
+Для продакшена TypeScript компилируют (`tsc`) или собирают, запускают `node dist/server.js` под менеджером процессов или в Docker-контейнере, за прокси nginx; включают `helmet` (заголовки безопасности) и `cors` только для своих доменов.
+```code
+import bcrypt from "bcrypt";
+import jwt from "jsonwebtoken";
+
+const SECRET = process.env.JWT_SECRET;
+if (!SECRET) throw new Error("JWT_SECRET не задан");
+
+app.post("/api/login", async (req, res) => {
+  const user = await db.user.findUnique({ where: { email: req.body.email } });
+  const ok = user && await bcrypt.compare(req.body.password, user.passwordHash);
+  if (!ok) return res.status(401).json({ error: "Неверная почта или пароль" });
+  const token = jwt.sign({ sub: user.id }, SECRET, { expiresIn: "1h" });
+  res.json({ token });
+});
+
+function auth(req, res, next) {
+  try {
+    const token = req.header("authorization")?.replace("Bearer ", "") ?? "";
+    req.userId = jwt.verify(token, SECRET).sub;
+    next();
+  } catch {
+    res.status(401).json({ error: "Нужен вход" });
+  }
+}
+app.get("/api/me", auth, (req, res) => res.json({ id: req.userId }));
+```
+! Никогда не храните пароль в открытом виде — только хеш bcrypt или argon2
+! Одинаковое сообщение для «нет пользователя» и «неверный пароль» — не подсказываем злоумышленнику
+! Секреты — в переменных окружения, `.env` — в `.gitignore`
+? mc Как хранить пароли пользователей?
++ Как хеш медленной функции (bcrypt, argon2) с солью
+- В открытом виде в базе
+- В base64
+- Зашифрованными одним ключом в коде
+= Даже при утечке базы пароли не удастся быстро восстановить.
+? mc Что содержит JWT?
++ Подписанные данные (например, id пользователя и срок действия), которые сервер может проверить без базы
+- Пароль пользователя
+- Зашифрованную базу данных
+- HTML страницы
+= Подпись гарантирует, что токен не подделан; сам токен читается, поэтому секретов в нём нет.
+? out Что выведет код?
+```code
+const header = "Bearer abc.def.ghi";
+const token = header.replace("Bearer ", "");
+console.log(token.split(".").length, token.startsWith("abc"));
+```
+> 3 true
+= JWT состоит из трёх частей: заголовок, данные и подпись.
+? fill Впишите объект Node.js, в котором лежат переменные окружения.
+```code
+const port = Number(process.___.PORT ?? 3000);
+```
+> env
+= process.env содержит переменные окружения.
+
+@exam
+? mc Какой метод и путь для удаления комментария 15?
++ DELETE /api/comments/15
+- GET /api/deleteComment?id=15
+- POST /api/comments/delete/15
+- PUT /api/comments
+= REST: ресурс в пути, действие — HTTP-метод.
+? mc Сервер упал с исключением при обработке запроса. Какой код увидит клиент?
++ 500
+- 400
+- 404
+- 201
+= Ошибки сервера — 5xx.
+? out Что выведет код?
+```code
+const statuses = [200, 201, 204, 400, 401, 404, 500];
+console.log(statuses.filter(s => s >= 400 && s < 500).length);
+```
+> 3
+= 400, 401 и 404 — ошибки клиента.
+? mc Где проверять токен пользователя для всех защищённых маршрутов?
++ В middleware, подключённом к этим маршрутам
+- В каждом обработчике вручную копированием кода
+- В браузере
+- В базе данных
+= Middleware выносит общую проверку в одно место.
+? fill Впишите библиотеку, которая хеширует пароли.
+```code
+const hash = await ___.hash(password, 12);
+```
+> bcrypt
+= bcrypt — медленный хеш с солью для паролей.
+? mc Что сделать с файлом `.env`?
++ Добавить в .gitignore и не коммитить
+- Положить в public
+- Отправить в README
+- Встроить в клиентский бандл
+= В .env лежат секреты.
+? out Что выведет код?
+```code
+const parse = (v: unknown) => typeof v === "number" && Number.isInteger(v) && v >= 1450 ? v : null;
+console.log(parse(2020), parse("2020"), parse(1200));
+```
+> 2020 null null
+= Строка и слишком ранний год не проходят проверку.
+? mc Зачем сразу падать при старте без JWT_SECRET?
++ Чтобы не запустить сервер в небезопасном состоянии и сразу увидеть ошибку конфигурации
+- Чтобы ускорить запуск
+- JWT работает без секрета
+- Это требование Express
+= Лучше упасть при деплое, чем выдавать токены с пустым секретом.

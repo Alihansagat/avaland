@@ -1,0 +1,403 @@
+@lang id=grpc name=gRPC и микросервисы land=Пещера gRPC color=#244c5a cave=go track=goback step=3
+@about Микросервисы на Go: Protocol Buffers, gRPC, стриминг, ошибки, наблюдаемость и Docker.
+@why Последняя, потому что микросервисы общаются между собой по gRPC, а внутри у каждого — HTTP и база из прошлых пещер. Это типичный стек Go-бэкенда в крупных компаниях.
+
+@lesson Protocol Buffers
+gRPC описывает API в файле `.proto`: сообщения (`message`) с пронумерованными полями и сервисы (`service`) с методами. Из одного файла генерируется код для Go, Python, Java и других языков — клиенты и серверы разных команд гарантированно совместимы.
+Номера полей — часть формата: их нельзя менять и переиспользовать. Новые поля добавляют с новыми номерами — старые клиенты просто их игнорируют, это обратная совместимость.
+Код генерирует `protoc` с плагинами `protoc-gen-go` и `protoc-gen-go-grpc` или инструмент buf.
+```code
+// api/catalog/v1/catalog.proto
+syntax = "proto3";
+package catalog.v1;
+option go_package = "shop/gen/catalog/v1;catalogv1";
+
+message Product {
+  int64 id = 1;
+  string name = 2;
+  int64 price = 3;            // в тиынах, без float для денег
+  repeated string tags = 4;
+}
+
+message GetProductRequest { int64 id = 1; }
+message ListProductsRequest { int32 page_size = 1; string page_token = 2; }
+message ListProductsResponse { repeated Product products = 1; string next_page_token = 2; }
+
+service CatalogService {
+  rpc GetProduct(GetProductRequest) returns (Product);
+  rpc ListProducts(ListProductsRequest) returns (ListProductsResponse);
+  rpc WatchPrices(GetProductRequest) returns (stream Product);   // серверный стрим
+}
+
+// генерация:
+// buf generate     или
+// protoc --go_out=. --go-grpc_out=. api/catalog/v1/catalog.proto
+```
+! Номера полей нельзя менять — это сломает совместимость
+! Деньги — в целых минимальных единицах, а не float
+! Версию API пишут в пакете (`catalog.v1`)
+? mc Почему нельзя поменять номер поля в proto-сообщении?
++ Номер — это идентификатор поля в бинарном формате; старые клиенты будут читать не те данные
+- Номера должны идти по алфавиту
+- protoc не позволит
+- Номера влияют только на документацию
+= Совместимость держится на номерах полей.
+? mc Что означает `repeated string tags = 4;`?
++ Список строк
+- Строка, повторённая 4 раза
+- Необязательная строка
+- Карта строк
+= repeated — список значений.
+? fill Впишите ключевое слово proto для потока ответов.
+```code
+rpc WatchPrices(GetProductRequest) returns (___ Product);
+```
+> stream
+= stream в ответе — серверный стриминг.
+? out Что выведет код?
+```code
+package main
+
+import "fmt"
+
+func main() {
+	priceTiyn := int64(129_990)
+	fmt.Printf("%d.%02d ₸\n", priceTiyn/100, priceTiyn%100)
+}
+```
+> 1299.90 ₸
+= Деньги хранят целыми в минимальных единицах и форматируют при выводе.
+
+@lesson gRPC-сервер и клиент
+Сервер реализует сгенерированный интерфейс: структура со встроенным `UnimplementedCatalogServiceServer` и методами `GetProduct(ctx, req)`. Регистрация — `catalogv1.RegisterCatalogServiceServer(grpcServer, &server{})`, запуск — `grpcServer.Serve(listener)`.
+Клиент создаётся через `grpc.NewClient(addr, ...)` и `catalogv1.NewCatalogServiceClient(conn)`, вызовы выглядят как обычные функции. Каждому вызову задают дедлайн через контекст.
+Ошибки возвращают со статус-кодами gRPC: `status.Error(codes.NotFound, "...")`, `codes.InvalidArgument`, `codes.Unavailable` — клиент проверяет их через `status.Code(err)`.
+```code
+package main
+
+import (
+	"context"
+	"log"
+	"net"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	catalogv1 "shop/gen/catalog/v1"
+)
+
+type server struct {
+	catalogv1.UnimplementedCatalogServiceServer
+	products map[int64]*catalogv1.Product
+}
+
+func (s *server) GetProduct(ctx context.Context, req *catalogv1.GetProductRequest) (*catalogv1.Product, error) {
+	if req.GetId() <= 0 {
+		return nil, status.Error(codes.InvalidArgument, "id должен быть положительным")
+	}
+	p, ok := s.products[req.GetId()]
+	if !ok {
+		return nil, status.Errorf(codes.NotFound, "товар %d не найден", req.GetId())
+	}
+	return p, nil
+}
+
+func main() {
+	lis, err := net.Listen("tcp", ":9090")
+	if err != nil {
+		log.Fatal(err)
+	}
+	g := grpc.NewServer()
+	catalogv1.RegisterCatalogServiceServer(g, &server{products: map[int64]*catalogv1.Product{
+		1: {Id: 1, Name: "Ноутбук", Price: 45_000_000},
+	}})
+	log.Fatal(g.Serve(lis))
+}
+
+// клиент:
+// conn, _ := grpc.NewClient("catalog:9090", grpc.WithTransportCredentials(insecure.NewCredentials()))
+// c := catalogv1.NewCatalogServiceClient(conn)
+// ctx, cancel := context.WithTimeout(ctx, 500*time.Millisecond); defer cancel()
+// p, err := c.GetProduct(ctx, &catalogv1.GetProductRequest{Id: 1})
+// if status.Code(err) == codes.NotFound { ... }
+```
+! Встраивайте `Unimplemented...Server` — новые методы не сломают сборку
+! Каждому вызову — дедлайн через контекст
+! Ошибки — gRPC-кодами, а не текстом
+? mc Какой код gRPC вернуть, если товара нет?
++ codes.NotFound
+- codes.Internal
+- codes.OK
+- codes.Unknown
+= Коды gRPC аналогичны HTTP-статусам.
+? mc Зачем клиенту дедлайн на каждый gRPC-вызов?
++ Чтобы зависший сервис не задержал всю цепочку вызовов бесконечно
+- Для логирования
+- Чтобы сжать данные
+- Это не нужно
+= Без дедлайнов сбои каскадно распространяются.
+? fill Впишите пакет gRPC для создания ошибок с кодом.
+```code
+return nil, ___.Error(codes.NotFound, "нет")
+```
+> status
+= status.Error создаёт ошибку с кодом gRPC.
+? out Что выведет код?
+```code
+package main
+
+import "fmt"
+
+type Code int
+
+const (
+	OK Code = iota
+	Canceled
+	Unknown
+	InvalidArgument
+	DeadlineExceeded
+	NotFound
+)
+
+func main() { fmt.Println(InvalidArgument, NotFound) }
+```
+> 3 5
+= iota нумерует константы с нуля — так устроены коды gRPC.
+
+@lesson Конкурентность в сервисах
+Горутины запускают параллельные запросы к другим сервисам, а `errgroup` собирает их результаты и первую ошибку: если один вызов упал, контекст остальных отменяется.
+Ограничить параллелизм помогает семафор (буферизованный канал) или `errgroup.SetLimit(n)`. Для повторных попыток при временных ошибках (`Unavailable`) используют повтор с экспоненциальной задержкой.
+Каналы передают данные между горутинами, `select` ждёт несколько событий сразу, в том числе отмену контекста.
+```code
+package main
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"golang.org/x/sync/errgroup"
+)
+
+func fetch(ctx context.Context, name string, d time.Duration) (string, error) {
+	select {
+	case <-time.After(d):
+		return name + ": ok", nil
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+}
+
+func main() {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	g, ctx := errgroup.WithContext(ctx)
+	results := make([]string, 3)
+	for i, svc := range []string{"catalog", "prices", "stock"} {
+		g.Go(func() error {
+			r, err := fetch(ctx, svc, time.Duration(100*(i+1))*time.Millisecond)
+			results[i] = r
+			return err
+		})
+	}
+	start := time.Now()
+	if err := g.Wait(); err != nil {
+		fmt.Println("ошибка:", err)
+		return
+	}
+	fmt.Println(results, time.Since(start) < 450*time.Millisecond)   // параллельно
+}
+```
+! `errgroup` — параллельные вызовы с общей отменой при ошибке
+! Ограничивайте число одновременных запросов к другим сервисам
+! В `select` всегда слушайте `ctx.Done()`
+? mc Что делает errgroup.WithContext при ошибке одной горутины?
++ Отменяет общий контекст, чтобы остальные вызовы прекратились, и Wait возвращает эту ошибку
+- Игнорирует ошибку
+- Перезапускает горутину
+- Паникует
+= Не нужно ждать бесполезную работу.
+? out Что выведет код?
+```code
+package main
+
+import "fmt"
+
+func main() {
+	ch := make(chan int, 3)
+	for i := 1; i <= 3; i++ {
+		ch <- i * i
+	}
+	close(ch)
+	sum := 0
+	for v := range ch {
+		sum += v
+	}
+	fmt.Println(sum)
+}
+```
+> 14
+= 1 + 4 + 9 = 14; range по закрытому каналу читает все значения.
+? fill Впишите конструкцию Go для ожидания нескольких каналов.
+```code
+___ {
+case v := <-results:
+case <-ctx.Done():
+}
+```
+> select
+= select выбирает первый готовый канал.
+? mc Когда стоит повторять gRPC-вызов?
++ При временных ошибках вроде Unavailable, с задержкой и ограничением числа попыток
+- При любой ошибке бесконечно
+- При InvalidArgument
+- Никогда
+= Повтор неверного запроса не поможет, а бесконечные повторы добивают упавший сервис.
+
+@lesson Наблюдаемость и Docker
+Микросервис должен быть наблюдаемым: структурированные логи с id запроса, метрики Prometheus (`/metrics`: число запросов, задержки, ошибки) и распределённые трейсы OpenTelemetry, которые показывают путь запроса через все сервисы.
+Эндпоинты здоровья `/healthz` (жив ли процесс) и `/readyz` (готов ли принимать трафик: есть база, прогрет кэш) использует Kubernetes.
+Go собирается в один статический бинарник, поэтому Docker-образ получается крошечным: многоэтапная сборка — в первом этапе `go build`, во втором только бинарник на `distroless` или `scratch`.
+```code
+# Dockerfile
+FROM golang:1.25 AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /app ./cmd/catalog
+
+FROM gcr.io/distroless/static-debian12
+COPY --from=build /app /app
+EXPOSE 8080 9090
+USER nonroot
+ENTRYPOINT ["/app"]
+
+# метрики в коде:
+# requests := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "http_requests_total"}, []string{"route", "code"})
+# mux.Handle("GET /metrics", promhttp.Handler())
+```
+! Логи, метрики и трейсы — три опоры наблюдаемости
+! `/healthz` и `/readyz` — для Kubernetes
+! Многоэтапная сборка и distroless — маленький и безопасный образ
+? mc Чем `/readyz` отличается от `/healthz`?
++ readyz показывает готовность принимать трафик (база, зависимости), healthz — что процесс жив
+- Ничем
+- readyz для людей, healthz для машин
+- healthz удаляет контейнер
+= Kubernetes не шлёт трафик в неготовый под.
+? mc Зачем многоэтапная сборка Docker-образа Go?
++ В итоговом образе только бинарник — он маленький и в нём нет компилятора и лишних утилит
+- Чтобы сборка шла дольше
+- Go не работает без неё
+- Чтобы образ был больше
+= Меньше размер — быстрее деплой и меньше поверхность атаки.
+? fill Впишите переменную окружения для статической сборки Go без C.
+```code
+RUN ___=0 go build -o /app ./cmd/api
+```
+> CGO_ENABLED
+= Без cgo бинарник не зависит от системных библиотек.
+? out Что выведет код?
+```code
+package main
+
+import (
+	"fmt"
+	"sort"
+)
+
+func main() {
+	latencies := []int{120, 35, 80, 300, 45, 60, 90, 40, 70, 50}
+	sort.Ints(latencies)
+	p90 := latencies[int(float64(len(latencies))*0.9)-1]
+	fmt.Println(latencies[0], p90)
+}
+```
+> 35 120
+= После сортировки 90-й перцентиль — 9-й элемент из 10. Такие перцентили задержек собирают метрики.
+
+@exam
+? mc Чем gRPC удобнее REST для общения микросервисов?
++ Строгий контракт в proto, генерация клиентов, компактный бинарный формат и стриминг
+- Он работает без сети
+- Он проще отлаживать в браузере
+- Ничем
+= Для внешних клиентов часто оставляют REST, для внутренних — gRPC.
+? out Что выведет код?
+```code
+package main
+
+import "fmt"
+
+func main() {
+	done := make(chan struct{})
+	result := 0
+	go func() {
+		for i := 1; i <= 10; i++ {
+			result += i
+		}
+		close(done)
+	}()
+	<-done
+	fmt.Println(result)
+}
+```
+> 55
+= Главная горутина ждёт закрытия канала done.
+? fill Впишите имя файла, где описывают gRPC-сервис.
+```code
+catalog.___
+```
+> proto
+= Файлы Protocol Buffers имеют расширение .proto.
+? mc Можно ли переиспользовать номер удалённого поля proto для нового поля?
++ Нет, номер нужно зарезервировать через reserved
+- Да, всегда
+- Только для строк
+- Только в proto2
+= Иначе старые данные прочитаются как новое поле.
+? mc Какой код gRPC вернуть при неверном аргументе?
++ InvalidArgument
+- NotFound
+- Internal
+- OK
+= Аналог HTTP 400.
+? mc Что покажет распределённый трейс?
++ Путь одного запроса через все сервисы и время на каждом участке
+- Число пользователей
+- Размер базы
+- Список коммитов
+= Трейсы помогают найти медленное звено.
+? out Что выведет код?
+```code
+package main
+
+import "fmt"
+
+func main() {
+	sem := make(chan struct{}, 2)
+	maxActive, active := 0, 0
+	for i := 0; i < 5; i++ {
+		sem <- struct{}{}
+		active++
+		if active > maxActive {
+			maxActive = active
+		}
+		if len(sem) == cap(sem) {
+			<-sem
+			active--
+		}
+	}
+	fmt.Println(cap(sem), maxActive)
+}
+```
+> 2 2
+= Буферизованный канал работает как семафор: одновременно не больше двух.
+? fill Впишите пакет для параллельных вызовов с общей ошибкой.
+```code
+import "golang.org/x/sync/___"
+```
+> errgroup
+= errgroup.Group запускает горутины и собирает первую ошибку.

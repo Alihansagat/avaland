@@ -1,0 +1,344 @@
+@lang id=gtest name=GoogleTest land=Пещера GoogleTest color=#34a853 cave=cpp track=cppdev step=3
+@about Тестирование C++: GoogleTest и GoogleMock, фикстуры, параметризованные тесты, CTest и CI.
+@why Последняя, потому что тесты подключаются через CMake (первая пещера) и должны проверять в том числе многопоточный код (вторая). Тестируемость — то, что отличает промышленный C++ от учебного.
+
+@lesson Первые тесты
+GoogleTest подключают через `FetchContent` и линкуют тест с `GTest::gtest_main`. Тест — макрос `TEST(Группа, Имя) { ... }`.
+Проверки: `EXPECT_EQ(a, b)` — продолжить тест при ошибке, `ASSERT_EQ` — остановить тест. Для дробных чисел — `EXPECT_NEAR(a, b, eps)` или `EXPECT_DOUBLE_EQ`, для исключений — `EXPECT_THROW(expr, Type)`.
+Тесты регистрируют в CTest (`gtest_discover_tests`) и запускают `ctest --test-dir build --output-on-failure`.
+```code
+// CMakeLists.txt
+// include(FetchContent)
+// FetchContent_Declare(googletest URL https://github.com/google/googletest/archive/refs/tags/v1.16.0.zip)
+// FetchContent_MakeAvailable(googletest)
+// enable_testing()
+// add_executable(bank_tests tests/account_test.cpp)
+// target_link_libraries(bank_tests PRIVATE bank_core GTest::gtest_main)
+// include(GoogleTest)
+// gtest_discover_tests(bank_tests)
+
+#include <gtest/gtest.h>
+#include <stdexcept>
+
+class Account {
+public:
+    void deposit(long amount) { if (amount <= 0) throw std::invalid_argument("amount"); balance_ += amount; }
+    bool withdraw(long amount) { if (amount > balance_) return false; balance_ -= amount; return true; }
+    long balance() const { return balance_; }
+private:
+    long balance_ = 0;
+};
+
+TEST(Account, DepositIncreasesBalance) {
+    Account a;
+    a.deposit(500);
+    EXPECT_EQ(a.balance(), 500);
+}
+
+TEST(Account, CannotWithdrawMoreThanBalance) {
+    Account a;
+    a.deposit(100);
+    EXPECT_FALSE(a.withdraw(150));
+    EXPECT_EQ(a.balance(), 100);
+}
+
+TEST(Account, RejectsNonPositiveDeposit) {
+    Account a;
+    EXPECT_THROW(a.deposit(0), std::invalid_argument);
+}
+```
+! `ASSERT_*` останавливает тест, `EXPECT_*` — продолжает и показывает все ошибки
+! Дробные числа сравнивайте через `EXPECT_NEAR`
+! `--output-on-failure` у ctest показывает вывод упавших тестов
+? mc Чем ASSERT_EQ отличается от EXPECT_EQ?
++ ASSERT прерывает тест при ошибке, EXPECT записывает ошибку и продолжает
+- Ничем
+- EXPECT быстрее
+- ASSERT работает только с числами
+= ASSERT нужен, когда дальнейшие проверки бессмысленны.
+? out Что выведет код?
+```code
+#include <iostream>
+int main() {
+    long balance = 100;
+    auto withdraw = [&](long a) { if (a > balance) return false; balance -= a; return true; };
+    std::cout << withdraw(150) << withdraw(40) << " " << balance << "\n";
+}
+```
+> 01 60
+= Первое снятие отклонено, второе прошло; bool печатается как 0 и 1.
+? fill Впишите макрос GoogleTest для проверки исключения.
+```code
+EXPECT____(parse(""), std::invalid_argument);
+```
+> THROW
+= EXPECT_THROW(выражение, тип исключения).
+? mc Как сравнить два double в тесте?
++ EXPECT_NEAR(a, b, 1e-9) или EXPECT_DOUBLE_EQ
+- EXPECT_EQ всегда
+- Через строки
+- Нельзя
+= Из-за погрешностей дробные числа редко равны точно.
+
+@lesson Фикстуры и параметризованные тесты
+Фикстура — класс-наследник `::testing::Test` с методом `SetUp()`: общая подготовка для группы тестов. Тесты пишут макросом `TEST_F(ИмяФикстуры, Тест)` и обращаются к полям фикстуры.
+Параметризованный тест прогоняет одну проверку на таблице входов: класс от `::testing::TestWithParam<T>`, макрос `TEST_P` и `INSTANTIATE_TEST_SUITE_P` со списком значений.
+Каждый тест получает свежий объект фикстуры — тесты не зависят друг от друга.
+```code
+#include <gtest/gtest.h>
+#include <string>
+#include <tuple>
+
+class Account {
+public:
+    void deposit(long a) { balance_ += a; }
+    bool withdraw(long a) { if (a > balance_) return false; balance_ -= a; return true; }
+    long balance() const { return balance_; }
+private:
+    long balance_ = 0;
+};
+
+class FundedAccount : public ::testing::Test {
+protected:
+    void SetUp() override { acc.deposit(1000); }
+    Account acc;
+};
+
+TEST_F(FundedAccount, WithdrawPart) {
+    EXPECT_TRUE(acc.withdraw(300));
+    EXPECT_EQ(acc.balance(), 700);
+}
+
+int vowels(const std::string& s) { int n = 0; for (char c : s) n += std::string("aeiou").find(c) != std::string::npos; return n; }
+
+class VowelsTest : public ::testing::TestWithParam<std::tuple<std::string, int>> {};
+
+TEST_P(VowelsTest, Counts) {
+    auto [word, expected] = GetParam();
+    EXPECT_EQ(vowels(word), expected);
+}
+
+INSTANTIATE_TEST_SUITE_P(Words, VowelsTest, ::testing::Values(
+    std::make_tuple("hello", 2), std::make_tuple("sky", 0), std::make_tuple("queue", 4)));
+```
+! Общая подготовка — в `SetUp()` фикстуры
+! Параметризованные тесты вместо копирования одинаковых тестов
+! Тесты не должны зависеть от порядка запуска
+? mc Сколько раз вызовется SetUp у фикстуры с тремя тестами TEST_F?
++ 3 — перед каждым тестом
+- 1
+- 0
+- 6
+= Каждый тест получает новый объект фикстуры.
+? out Что выведет код?
+```code
+#include <iostream>
+#include <string>
+int vowels(const std::string& s) { int n = 0; for (char c : s) n += std::string("aeiou").find(c) != std::string::npos; return n; }
+int main() { std::cout << vowels("hello") << vowels("sky") << vowels("queue") << "\n"; }
+```
+> 204
+= hello — 2, sky — 0, queue — 4.
+? fill Впишите макрос теста, использующего фикстуру.
+```code
+___(FundedAccount, Withdraw) { ... }
+```
+> TEST_F
+= TEST_F даёт доступ к полям фикстуры.
+? mc Для чего INSTANTIATE_TEST_SUITE_P?
++ Задаёт набор параметров, на которых прогоняется TEST_P
+- Запускает все тесты
+- Создаёт фикстуру
+- Отключает тест
+= Без инстанцирования параметризованные тесты не выполнятся.
+
+@lesson GoogleMock
+GoogleMock создаёт подставные классы для интерфейсов: `MOCK_METHOD(bool, charge, (long amount), (override));`. Так тестируют код, который зависит от сети, базы или времени.
+Ожидания задают до вызова: `EXPECT_CALL(gateway, charge(500)).WillOnce(Return(true));` — тест упадёт, если вызова не было или он был с другими аргументами. `Times(0)` проверяет, что метод не вызывался.
+Чтобы код можно было мокать, зависимость передают через интерфейс (абстрактный класс с виртуальными методами) — в конструктор, ссылкой или `std::unique_ptr`.
+```code
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+#include <string>
+
+struct PaymentGateway {
+    virtual ~PaymentGateway() = default;
+    virtual bool charge(long amount) = 0;
+};
+struct Mailer {
+    virtual ~Mailer() = default;
+    virtual void send(const std::string& to, const std::string& text) = 0;
+};
+
+class Checkout {
+public:
+    Checkout(PaymentGateway& g, Mailer& m) : gw_(g), mail_(m) {}
+    std::string pay(const std::string& email, long amount) {
+        if (!gw_.charge(amount)) return "DECLINED";
+        mail_.send(email, "paid " + std::to_string(amount));
+        return "PAID";
+    }
+private:
+    PaymentGateway& gw_; Mailer& mail_;
+};
+
+struct MockGateway : PaymentGateway { MOCK_METHOD(bool, charge, (long), (override)); };
+struct MockMailer : Mailer { MOCK_METHOD(void, send, (const std::string&, const std::string&), (override)); };
+
+using ::testing::Return; using ::testing::HasSubstr; using ::testing::_;
+
+TEST(Checkout, SendsReceiptWhenPaid) {
+    MockGateway gw; MockMailer mail;
+    EXPECT_CALL(gw, charge(500)).WillOnce(Return(true));
+    EXPECT_CALL(mail, send("ada@mail.kz", HasSubstr("500")));
+    EXPECT_EQ(Checkout(gw, mail).pay("ada@mail.kz", 500), "PAID");
+}
+
+TEST(Checkout, NoReceiptWhenDeclined) {
+    MockGateway gw; MockMailer mail;
+    EXPECT_CALL(gw, charge(_)).WillOnce(Return(false));
+    EXPECT_CALL(mail, send(_, _)).Times(0);
+    EXPECT_EQ(Checkout(gw, mail).pay("ada@mail.kz", 500), "DECLINED");
+}
+```
+! Мокают интерфейсы с виртуальными методами
+! `EXPECT_CALL` пишут до вызова тестируемого кода
+! `_` — любой аргумент, `Times(0)` — вызова быть не должно
+? mc Что проверяет `EXPECT_CALL(mail, send(_, _)).Times(0)`?
++ Что метод send ни разу не вызывался
+- Что send вызван с пустыми строками
+- Что send вызван ноль секунд
+- Ничего
+= Проверка отсутствия взаимодействия.
+? mc Почему класс Checkout принимает PaymentGateway& через интерфейс?
++ Чтобы в тесте подставить мок вместо настоящего платёжного шлюза
+- Так быстрее
+- Это требование STL
+- Ссылки нельзя копировать
+= Зависимость от абстракции делает код тестируемым.
+? fill Впишите макрос GoogleMock для описания мок-метода.
+```code
+___(bool, charge, (long), (override));
+```
+> MOCK_METHOD
+= MOCK_METHOD(тип, имя, (аргументы), (спецификаторы)).
+? out Что выведет код?
+```code
+#include <iostream>
+#include <string>
+int main() {
+    auto charge = [](long a) { return a <= 1000; };
+    int sent = 0;
+    auto pay = [&](long a) { if (!charge(a)) return std::string("DECLINED"); ++sent; return std::string("PAID"); };
+    std::cout << pay(5000) << " " << pay(500) << " " << sent << "\n";
+}
+```
+> DECLINED PAID 1
+= Ручная заглушка: большой платёж отклонён, маленький прошёл.
+
+@lesson Тесты в CI и покрытие
+В CI (GitHub Actions) собирают проект в Debug с санитайзерами и запускают `ctest`: так ловятся и падения тестов, и ошибки памяти. Матрица сборок проверяет GCC и Clang, Linux и Windows.
+Покрытие кода собирают флагами `--coverage` и инструментами gcov/lcov или gcovr. Оно показывает непроверенные ветки, но не гарантирует правильность проверок.
+Бенчмарки (Google Benchmark) — отдельный вид тестов: они следят, чтобы производительность не ухудшилась после изменений.
+```code
+# .github/workflows/ci.yml
+name: ci
+on: [push, pull_request]
+jobs:
+  build:
+    strategy:
+      matrix:
+        compiler: [g++, clang++]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER=${{ matrix.compiler }} -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined"
+      - run: cmake --build build -j
+      - run: ctest --test-dir build --output-on-failure
+```
+! Тесты в CI с санитайзерами — минимальный стандарт
+! Проверяйте несколько компиляторов: они по-разному ловят ошибки
+! Бенчмарки — для кода, где важна скорость
+? mc Зачем матрица компиляторов g++ и clang++ в CI?
++ Разные компиляторы ловят разные ошибки и предупреждения, код становится переносимее
+- Чтобы CI работал дольше
+- Это обязательно для CMake
+- Чтобы выбрать быстрейший
+= Переносимость и раннее обнаружение проблем.
+? mc Что показывает покрытие кода?
++ Какие строки и ветки выполнялись в тестах
+- Количество ошибок
+- Скорость программы
+- Размер бинарника
+= Покрытие помогает найти непроверенный код.
+? fill Впишите команду CMake-инструмента для запуска тестов.
+```code
+___ --test-dir build --output-on-failure
+```
+> ctest
+= ctest запускает тесты, зарегистрированные в CMake.
+? out Что выведет код?
+```code
+#include <iostream>
+int main() {
+    int lines = 200, covered = 150;
+    std::cout << covered * 100 / lines << "%\n";
+}
+```
+> 75%
+= Покрыто 150 строк из 200.
+
+@exam
+? mc Какой макрос объявляет обычный тест GoogleTest?
++ TEST(Suite, Name)
+- TEST_F(Suite, Name) без фикстуры
+- MOCK_METHOD
+- INSTANTIATE_TEST_SUITE_P
+= TEST — для тестов без фикстуры.
+? fill Впишите библиотеку CMake-цели, которая даёт готовый main для тестов.
+```code
+target_link_libraries(tests PRIVATE GTest::___)
+```
+> gtest_main
+= gtest_main содержит функцию main, запускающую все тесты.
+? out Что выведет код?
+```code
+#include <iostream>
+#include <cmath>
+int main() {
+    double a = 0.1 + 0.2;
+    std::cout << (a == 0.3) << " " << (std::fabs(a - 0.3) < 1e-9) << "\n";
+}
+```
+> 0 1
+= Точное сравнение ложно, сравнение с допуском — истинно. Поэтому EXPECT_NEAR.
+? mc Тест падает только в CI, а локально проходит. Возможная причина?
++ Зависимость от окружения: порядка тестов, времени, файлов или гонки потоков
+- CI всегда врёт
+- Нужно отключить тест
+- GoogleTest не работает в CI
+= Тесты должны быть детерминированными.
+? mc Что нужно, чтобы замокать класс через GoogleMock?
++ Интерфейс с виртуальными методами и класс-мок с MOCK_METHOD
+- Только шаблоны
+- Глобальные функции
+- Макрос TEST
+= gMock переопределяет виртуальные методы.
+? mc Где подготовить общий объект для нескольких тестов?
++ В SetUp() фикстуры
+- В глобальной переменной
+- В main
+- В CMakeLists.txt
+= Фикстура создаётся заново для каждого теста.
+? fill Впишите макрос, который останавливает тест при неравенстве.
+```code
+___(v.size(), 3u);
+```
+> ASSERT_EQ
+= ASSERT_* прерывает тест.
+? mc Что делает флаг `--output-on-failure` у ctest?
++ Показывает вывод тестов, которые упали
+- Отключает вывод
+- Повторяет упавшие тесты
+- Сохраняет покрытие
+= Удобно для разбора ошибок в CI.

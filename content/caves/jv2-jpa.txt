@@ -1,0 +1,299 @@
+@lang id=jpa name=Spring Data JPA land=Пещера JPA color=#59666c cave=java track=jvm step=2
+@about Работа с базой данных из Java: сущности, репозитории, запросы, связи, транзакции и миграции.
+@why Вторая, потому что почти любой Spring-сервис хранит данные в PostgreSQL. Spring Data JPA встраивается в слой репозиториев, который появился в первой пещере.
+
+@lesson Сущности и репозитории
+JPA отображает классы на таблицы: класс с `@Entity` — таблица, поле с `@Id` — первичный ключ, `@GeneratedValue` — автоинкремент. Реализация JPA в Spring — Hibernate.
+Репозиторий — интерфейс, наследник `JpaRepository<Entity, IdType>`. Реализацию Spring создаёт сам: сразу доступны `save`, `findById`, `findAll`, `deleteById`, `count`, а также постраничный вывод `findAll(PageRequest.of(0, 20))`.
+Сущности — изменяемые классы с конструктором без аргументов (JPA требует), а наружу через API отдают отдельные DTO, чтобы не раскрывать структуру базы.
+```code
+import jakarta.persistence.*;
+import org.springframework.data.jpa.repository.JpaRepository;
+import java.util.*;
+
+@Entity
+@Table(name = "books")
+public class Book {
+    @Id @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+    @Column(nullable = false, length = 200)
+    private String title;
+    private int year;
+
+    protected Book() {}                       // нужен JPA
+    public Book(String title, int year) { this.title = title; this.year = year; }
+    public Long getId() { return id; }
+    public String getTitle() { return title; }
+    public int getYear() { return year; }
+}
+
+public interface BookRepository extends JpaRepository<Book, Long> {}
+
+// в сервисе:
+// Book saved = repo.save(new Book("Effective Java", 2018));
+// Optional<Book> b = repo.findById(saved.getId());
+// Page<Book> page = repo.findAll(PageRequest.of(0, 20, Sort.by("year").descending()));
+```
+! Репозиторий — интерфейс, реализацию генерирует Spring
+! Наружу отдавайте DTO, а не сущности
+! `findById` возвращает `Optional` — обработайте отсутствие
+? mc Что нужно написать, чтобы получить методы save, findById, findAll для сущности Book?
++ Интерфейс, наследующий JpaRepository<Book, Long>
+- Класс с SQL для каждого метода
+- Аннотацию @Table в контроллере
+- Ничего, они есть у любого класса
+= Spring Data создаёт реализацию репозитория автоматически.
+? mc Зачем у сущности конструктор без аргументов?
++ JPA создаёт объекты при чтении из базы через него
+- Для красоты
+- Для JSON
+- Так требует Maven
+= Hibernate сначала создаёт пустой объект, потом заполняет поля.
+? fill Впишите аннотацию поля первичного ключа.
+```code
+@___ @GeneratedValue
+private Long id;
+```
+> Id
+= @Id отмечает первичный ключ.
+? out Что выведет код?
+```code
+import java.util.*;
+Map<Long, String> db = new HashMap<>();
+long nextId = 1;
+db.put(nextId++, "SICP"); db.put(nextId++, "Чистый код");
+System.out.println(db.size() + " " + Optional.ofNullable(db.get(3L)).isPresent());
+```
+> 2 false
+= Две записи, id = 3 нет — так findById вернёт пустой Optional.
+
+@lesson Запросы: методы-имена и JPQL
+Spring Data строит запрос по имени метода: `findByTitleContainingIgnoreCase(String part)`, `findByYearGreaterThanOrderByYearDesc(int year)`, `countByAuthorId(Long id)`, `existsByEmail(String email)`.
+Сложные запросы пишут в `@Query` на JPQL (запросы к сущностям, а не к таблицам) или нативным SQL (`nativeQuery = true`). Параметры — именованные `:name`.
+Чтобы не тянуть всю сущность, используют проекции: интерфейс или record с нужными полями.
+```code
+import org.springframework.data.jpa.repository.*;
+import org.springframework.data.repository.query.Param;
+import java.util.*;
+
+public interface BookRepository extends JpaRepository<Book, Long> {
+    List<Book> findByTitleContainingIgnoreCase(String part);
+    List<Book> findByYearGreaterThanOrderByYearDesc(int year);
+    boolean existsByTitle(String title);
+
+    @Query("select b from Book b where b.year between :from and :to")
+    List<Book> published(@Param("from") int from, @Param("to") int to);
+
+    record YearCount(int year, long total) {}
+    @Query("select new com.shop.BookRepository$YearCount(b.year, count(b)) from Book b group by b.year")
+    List<YearCount> countByYear();
+}
+```
+! Имя метода — это запрос: следите, чтобы поля совпадали с полями сущности
+! JPQL работает с классами и полями, а не с таблицами и столбцами
+! Проекции — когда нужны 2 поля из 30
+? mc Какой запрос построит `findByYearGreaterThan(2020)`?
++ Книги с year > 2020
+- Книги с year >= 2020
+- Количество книг
+- Удаление книг
+= GreaterThan — строго больше, GreaterThanEqual — больше или равно.
+? mc Чем JPQL отличается от SQL?
++ JPQL обращается к сущностям и их полям, SQL — к таблицам и столбцам
+- JPQL быстрее
+- В JPQL нет where
+- Ничем
+= Hibernate переводит JPQL в SQL конкретной базы.
+? out Что выведет код?
+```code
+import java.util.*;
+var titles = List.of("Java Basics", "Learning JAVA", "Go in Action");
+System.out.println(titles.stream().filter(t -> t.toLowerCase().contains("java")).count());
+```
+> 2
+= Так работает ContainingIgnoreCase.
+? fill Впишите аннотацию для своего JPQL-запроса.
+```code
+@___("select b from Book b where b.year > :y")
+```
+> Query
+= @Query задаёт запрос метода репозитория.
+
+@lesson Связи и ленивая загрузка
+Связи: `@ManyToOne` (много книг у одного автора), `@OneToMany(mappedBy = "author")` (список книг у автора), `@ManyToMany` через таблицу связи. Внешний ключ задаёт `@JoinColumn`.
+По умолчанию коллекции загружаются лениво (`LAZY`): книги автора запрашиваются, только когда к ним обращаются. Если в цикле по 100 авторам трогать их книги — получится 101 запрос (проблема N+1).
+Решения: `join fetch` в JPQL, `@EntityGraph(attributePaths = "books")` на методе репозитория или проекция с нужными полями. Включайте логирование SQL в разработке, чтобы видеть реальные запросы.
+```code
+import jakarta.persistence.*;
+import java.util.*;
+
+@Entity
+class Author {
+    @Id @GeneratedValue Long id;
+    String name;
+    @OneToMany(mappedBy = "author")
+    List<Book> books = new ArrayList<>();
+}
+
+@Entity
+class Book {
+    @Id @GeneratedValue Long id;
+    String title;
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "author_id")
+    Author author;
+}
+
+interface AuthorRepository extends org.springframework.data.jpa.repository.JpaRepository<Author, Long> {
+    @org.springframework.data.jpa.repository.Query("select distinct a from Author a left join fetch a.books")
+    List<Author> findAllWithBooks();                  // один запрос вместо N+1
+}
+
+// application.yml для разработки:
+// spring.jpa.show-sql: true
+```
+! Коллекции по умолчанию LAZY — следите за N+1
+! `join fetch` или `@EntityGraph` загружают связь сразу
+! `mappedBy` — у той стороны, где нет внешнего ключа
+? mc Что такое ленивая загрузка (LAZY)?
++ Связанные данные запрашиваются из базы только при первом обращении к ним
+- Запросы выполняются медленно специально
+- Данные никогда не загружаются
+- Загрузка в фоне по таймеру
+= Это экономит запросы, но может породить N+1.
+? out Что выведет код?
+```code
+int authors = 50;
+int lazyQueries = 1 + authors;
+int fetchJoinQueries = 1;
+System.out.println(lazyQueries + " " + fetchJoinQueries);
+```
+> 51 1
+= Ленивая загрузка в цикле — 1 + N запросов, join fetch — один.
+? fill Впишите аннотацию для связи «много книг — один автор» на стороне книги.
+```code
+@___
+Author author;
+```
+> ManyToOne
+= @ManyToOne на стороне, где лежит внешний ключ.
+? mc Как увидеть реальные SQL-запросы Hibernate при разработке?
++ Включить spring.jpa.show-sql или логирование org.hibernate.SQL
+- Открыть Swagger
+- Посмотреть в браузере
+- Никак
+= Логи SQL помогают найти N+1 и лишние запросы.
+
+@lesson Транзакции и миграции Flyway
+`@Transactional` на методе сервиса выполняет его в транзакции: при исключении изменения откатываются. Внутри транзакции изменённые сущности сохраняются автоматически при коммите — явный `save` не обязателен.
+`@Transactional(readOnly = true)` для чтения — небольшая оптимизация. Транзакция работает только при вызове метода снаружи бина: вызов `this.method()` внутри класса её не создаст.
+Схему базы не генерируют автоматически в проде (`ddl-auto: validate`), а меняют миграциями Flyway: файлы `V1__init.sql`, `V2__add_index.sql` применяются по порядку при запуске.
+```code
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+@Service
+class TransferService {
+    private final AccountRepository accounts;
+    TransferService(AccountRepository accounts) { this.accounts = accounts; }
+
+    @Transactional
+    public void transfer(long fromId, long toId, long amount) {
+        Account from = accounts.findById(fromId).orElseThrow();
+        Account to = accounts.findById(toId).orElseThrow();
+        if (from.getBalance() < amount) throw new IllegalStateException("Недостаточно средств");
+        from.setBalance(from.getBalance() - amount);
+        to.setBalance(to.getBalance() + amount);
+        // save не нужен: изменения сохранятся при коммите транзакции
+    }
+}
+
+// src/main/resources/db/migration/V1__init.sql
+// create table account (id bigserial primary key, balance bigint not null check (balance >= 0));
+// application.yml: spring.jpa.hibernate.ddl-auto: validate
+```
+! `@Transactional` — на публичных методах сервиса
+! В проде `ddl-auto: validate`, схема меняется только миграциями
+! Ограничения в базе (`check`, `not null`, `unique`) страхуют от ошибок кода
+? mc Что произойдёт с изменениями, если внутри @Transactional-метода брошено RuntimeException?
++ Транзакция откатится, изменения не сохранятся
+- Сохранится половина
+- Приложение упадёт
+- Изменения сохранятся
+= Непроверяемые исключения по умолчанию вызывают откат.
+? mc Почему в продакшене не используют `ddl-auto: update`?
++ Hibernate может непредсказуемо изменить схему; изменения должны идти через проверенные миграции
+- Он медленный
+- Он не работает с PostgreSQL
+- Это платная функция
+= Миграции версионируются и проверяются на ревью.
+? fill Впишите аннотацию, выполняющую метод в транзакции.
+```code
+@___
+public void pay(long orderId) {}
+```
+> Transactional
+= @Transactional из Spring.
+? out Что выведет код?
+```code
+long from = 100, to = 0, amount = 150;
+try {
+    if (from < amount) throw new IllegalStateException("мало");
+    from -= amount; to += amount;
+} catch (IllegalStateException e) { System.out.print("откат "); }
+System.out.println(from + " " + to);
+```
+> откат 100 0
+= Проверка не прошла — балансы не изменились.
+
+@exam
+? mc Что делает аннотация @Entity?
++ Отмечает класс, который отображается на таблицу базы
+- Создаёт REST-контроллер
+- Делает класс неизменяемым
+- Шифрует данные
+= Сущности JPA соответствуют таблицам.
+? mc Как получить вторую страницу книг по 20 штук?
++ repo.findAll(PageRequest.of(1, 20))
+- repo.findAll().subList(20, 40) в любом случае
+- repo.page(2)
+- SELECT * без LIMIT
+= Номер страницы в PageRequest начинается с нуля.
+? out Что выведет код?
+```code
+int page = 1, size = 20;
+System.out.println("offset=" + page * size + " limit=" + size);
+```
+> offset=20 limit=20
+= Вторая страница (индекс 1) начинается с 20-й записи.
+? fill Впишите интерфейс Spring Data для репозиториев.
+```code
+interface UserRepository extends ___<User, Long> {}
+```
+> JpaRepository
+= JpaRepository даёт CRUD и пагинацию.
+? mc Чем грозит обращение к ленивой коллекции в цикле?
++ Проблемой N+1 — отдельным запросом на каждый элемент
+- Ошибкой компиляции
+- Удалением данных
+- Ничем
+= Нужен join fetch или EntityGraph.
+? mc Где описывают изменения схемы базы в продакшен-проекте?
++ В версионных миграциях Flyway или Liquibase
+- В ddl-auto=create
+- Вручную в консоли базы на сервере
+- В README
+= Миграции воспроизводимы и проходят ревью.
+? out Что выведет код?
+```code
+String name = "findByEmailAndActiveTrue";
+System.out.println(name.startsWith("findBy") + " " + name.contains("And"));
+```
+> true true
+= Spring Data разбирает такое имя на условия email = ? and active = true.
+? mc Зачем отдельные DTO, если есть сущности?
++ Чтобы не раскрывать структуру базы, не отдавать лишние поля и не ловить проблемы ленивой загрузки при сериализации
+- DTO быстрее сущностей
+- Сущности нельзя сериализовать никогда
+- Так требует JSON
+= API — контракт, который не должен зависеть от таблиц.

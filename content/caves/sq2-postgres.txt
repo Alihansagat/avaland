@@ -1,0 +1,269 @@
+@lang id=postgres name=PostgreSQL land=Пещера PostgreSQL color=#336791 cave=sql track=analyst step=2
+@about Главная база данных аналитиков и бэкендеров: типы и JSONB, планы запросов, представления и права доступа.
+@why Вторая, потому что в компаниях данные живут в PostgreSQL или в похожих хранилищах. Умение читать планы запросов и строить представления нужно, чтобы дашборды из последней пещеры работали быстро.
+
+@lesson Типы данных и JSONB
+PostgreSQL строже SQLite к типам: `integer`, `bigint`, `numeric(12,2)` для денег (никогда не float), `text`, `boolean`, `date`, `timestamptz` (время с часовым поясом), `uuid`, массивы `text[]`.
+`jsonb` хранит JSON в бинарном виде: доступ `data->'utm'` (JSON) и `data->>'source'` (текст), проверка `data ? 'promo'`, поиск `data @> '{"source":"ads"}'`. GIN-индекс ускоряет такие запросы.
+Приведение типов — `'42'::int`, `now()::date`. Генерация рядов — `generate_series('2026-01-01'::date, '2026-12-01', interval '1 month')`.
+```code
+CREATE TABLE events (
+  id          bigserial PRIMARY KEY,
+  user_id     bigint      NOT NULL,
+  name        text        NOT NULL,
+  props       jsonb       NOT NULL DEFAULT '{}',
+  created_at  timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX events_props_gin ON events USING gin (props);
+
+-- переходы из рекламы по источникам за неделю
+SELECT props->>'source'           AS source,
+       COUNT(DISTINCT user_id)    AS users
+FROM events
+WHERE name = 'visit'
+  AND props @> '{"utm": {"medium": "cpc"}}'
+  AND created_at >= now() - interval '7 days'
+GROUP BY 1
+ORDER BY users DESC;
+```
+! Деньги — `numeric`, время — `timestamptz`
+! `->>` возвращает текст, `->` — JSON
+! JSONB удобен для гибких свойств, но основные поля держите столбцами
+? mc Какой тип выбрать для цены в PostgreSQL?
++ numeric(12,2)
+- float
+- real
+- text
+= Числа с плавающей точкой дают ошибки округления.
+? mc Чем `props->'source'` отличается от `props->>'source'`?
++ -> возвращает jsonb, ->> возвращает text
+- Ничем
+- ->> работает только с массивами
+- -> быстрее
+= Для сравнения со строкой нужен ->>.
+? fill Впишите тип для даты и времени с часовым поясом.
+```code
+created_at ___ NOT NULL DEFAULT now()
+```
+> timestamptz
+= Хранит момент времени в UTC и учитывает пояс при выводе.
+? out Что вернёт запрос в SQLite (аналог ->> в PostgreSQL)?
+```code
+SELECT json_extract('{"source":"ads","utm":{"medium":"cpc"}}', '$.utm.medium');
+```
+> cpc
+= Путь к вложенному полю JSON.
+
+@lesson EXPLAIN и индексы
+`EXPLAIN ANALYZE` выполняет запрос и показывает план: какие узлы (Seq Scan, Index Scan, Hash Join, Sort), сколько строк ожидалось и сколько получилось, время каждого шага.
+Признаки проблем: Seq Scan по большой таблице с фильтром, сильная разница между `rows=` ожидаемыми и фактическими (устаревшая статистика — `ANALYZE`), Sort на диске.
+Составной индекс `(customer_id, order_date)` работает для фильтра по первому столбцу и по обоим; порядок столбцов важен. Частичный индекс `WHERE status = 'paid'` меньше и быстрее. Каждый индекс замедляет запись — лишние удаляют.
+```code
+EXPLAIN ANALYZE
+SELECT order_date, status
+FROM orders
+WHERE customer_id = 42
+ORDER BY order_date DESC
+LIMIT 10;
+-- Seq Scan on orders (rows=10 ... actual time=0.02..85.3)   ← читает всю таблицу
+
+CREATE INDEX orders_customer_date ON orders (customer_id, order_date DESC);
+-- Index Scan using orders_customer_date on orders (actual time=0.03..0.05)
+
+CREATE INDEX orders_paid ON orders (order_date) WHERE status = 'paid';   -- частичный
+
+-- найти неиспользуемые индексы
+SELECT relname, indexrelname, idx_scan
+FROM pg_stat_user_indexes
+WHERE idx_scan = 0;
+```
+! Сначала `EXPLAIN ANALYZE`, потом индекс
+! В составном индексе первым — столбец для равенства
+! Неиспользуемые индексы только замедляют запись
+? mc Что означает Seq Scan в плане большого запроса с фильтром?
++ База читает всю таблицу — возможно, не хватает индекса
+- Запрос использует индекс
+- Запрос выполнится мгновенно
+- Ошибка в синтаксисе
+= На маленьких таблицах Seq Scan нормален.
+? mc Подойдёт ли индекс (customer_id, order_date) для запроса WHERE order_date > '2026-09-01'?
++ Обычно нет: фильтра по первому столбцу индекса нет
+- Да, всегда
+- Да, если добавить LIMIT
+- Индексы не работают с датами
+= Правило левого префикса.
+? fill Впишите команду, выполняющую запрос и показывающую фактический план.
+```code
+EXPLAIN ___ SELECT * FROM orders WHERE id = 1;
+```
+> ANALYZE
+> analyze
+= Без ANALYZE план только оценочный.
+? out Что вернёт запрос в SQLite?
+```code
+CREATE TABLE t(a, b);
+CREATE INDEX t_ab ON t(a, b);
+SELECT COUNT(*) FROM pragma_index_info('t_ab');
+```
+> 2
+= Составной индекс из двух столбцов.
+
+@lesson Представления и материализованные представления
+Представление `CREATE VIEW` сохраняет запрос под именем: аналитики и BI-инструменты пишут `SELECT * FROM paid_orders` вместо длинного JOIN. Данные не копируются — запрос выполняется каждый раз.
+Материализованное представление `CREATE MATERIALIZED VIEW` хранит результат: читается мгновенно, но обновляется только по `REFRESH MATERIALIZED VIEW` (по расписанию). `CONCURRENTLY` обновляет без блокировки чтения (нужен уникальный индекс).
+Так строят витрины данных: сырые таблицы → очищенные представления → агрегаты для дашбордов.
+```code
+CREATE VIEW paid_order_revenue AS
+SELECT o.id, o.customer_id, o.order_date,
+       SUM(p.price * oi.qty) AS revenue
+FROM orders o
+JOIN order_items oi ON oi.order_id = o.id
+JOIN products p     ON p.id = oi.product_id
+WHERE o.status = 'paid'
+GROUP BY o.id, o.customer_id, o.order_date;
+
+CREATE MATERIALIZED VIEW daily_sales AS
+SELECT order_date::date AS day, COUNT(*) AS orders, SUM(revenue) AS revenue
+FROM paid_order_revenue
+GROUP BY 1;
+CREATE UNIQUE INDEX ON daily_sales (day);
+
+-- каждую ночь (cron, pg_cron или Airflow):
+REFRESH MATERIALIZED VIEW CONCURRENTLY daily_sales;
+```
+! VIEW — сохранённый запрос, MATERIALIZED VIEW — сохранённый результат
+! Материализованные представления обновляют по расписанию
+! Слои: сырые данные → очищенные → витрины
+? mc Чем материализованное представление отличается от обычного?
++ Хранит результат запроса и обновляется командой REFRESH
+- Ничем
+- Обычное представление хранит данные
+- Материализованное нельзя читать
+= Быстро читать, но данные могут устареть.
+? mc Как обновить материализованное представление, не блокируя чтение?
++ REFRESH MATERIALIZED VIEW CONCURRENTLY при наличии уникального индекса
+- DROP и CREATE заново
+- UPDATE по всем строкам
+- Никак
+= Пользователи дашбордов не заметят обновления.
+? fill Впишите команду создания сохранённого запроса.
+```code
+CREATE ___ active_customers AS SELECT * FROM customers WHERE active;
+```
+> VIEW
+> view
+= Представление — виртуальная таблица.
+? out Что вернёт запрос?
+```code
+CREATE TABLE o(status, total);
+INSERT INTO o VALUES ('paid', 100), ('new', 50), ('paid', 70);
+CREATE VIEW paid AS SELECT * FROM o WHERE status = 'paid';
+INSERT INTO o VALUES ('paid', 30);
+SELECT COUNT(*), SUM(total) FROM paid;
+```
+> 3 200
+> 3, 200
+= Обычное представление всегда показывает актуальные данные.
+
+@lesson Права, роли и безопасность
+Аналитикам дают отдельную роль только на чтение: `CREATE ROLE analyst LOGIN`, `GRANT SELECT ON ALL TABLES IN SCHEMA public TO analyst`. Подключаться к основной базе лучше через реплику, чтобы тяжёлые отчёты не мешали приложению.
+Персональные данные (телефоны, почты) скрывают: отдельное представление без них или маскирование, права только на представление. Row Level Security ограничивает строки: менеджер видит только свой регион.
+`statement_timeout` защищает базу от бесконечных запросов, а `LIMIT` при исследовании — от выгрузки миллионов строк.
+```code
+CREATE ROLE analyst LOGIN PASSWORD 'задаётся администратором';
+GRANT USAGE ON SCHEMA analytics TO analyst;
+GRANT SELECT ON ALL TABLES IN SCHEMA analytics TO analyst;
+ALTER ROLE analyst SET statement_timeout = '60s';
+
+-- представление без персональных данных
+CREATE VIEW analytics.customers AS
+SELECT id, city, signup_date,
+       left(email, 2) || '***@' || split_part(email, '@', 2) AS email_masked
+FROM public.customers;
+
+-- RLS: менеджер видит только свой город
+ALTER TABLE public.orders ENABLE ROW LEVEL SECURITY;
+CREATE POLICY by_city ON public.orders
+  USING (city = current_setting('app.city'));
+```
+! Аналитикам — только SELECT и лучше на реплике
+! Персональные данные — через маскирующие представления
+! `statement_timeout` — защита от тяжёлых запросов
+? mc Какие права нужны аналитику для построения отчётов?
++ Только SELECT на нужные схемы или представления
+- Владелец базы
+- DELETE и UPDATE
+- SUPERUSER
+= Принцип минимальных привилегий.
+? out Что вернёт запрос в SQLite?
+```code
+SELECT substr('ada@mail.kz', 1, 2) || '***@' || substr('ada@mail.kz', instr('ada@mail.kz', '@') + 1);
+```
+> ad***@mail.kz
+= Маскирование почты.
+? fill Впишите команду выдачи прав.
+```code
+___ SELECT ON ALL TABLES IN SCHEMA analytics TO analyst;
+```
+> GRANT
+> grant
+= REVOKE — отзыв прав.
+? mc Зачем аналитические запросы отправлять на реплику?
++ Тяжёлые отчёты не будут тормозить основное приложение
+- На реплике другие данные
+- Реплика бесплатная
+- Так быстрее пишутся данные
+= Реплика — копия только для чтения.
+
+@exam
+? mc Почему для денег не используют float?
++ Двоичные числа с плавающей точкой дают ошибки округления
+- float медленнее
+- float не поддерживает отрицательные числа
+- Так требует закон
+= 0.1 + 0.2 ≠ 0.3 во float.
+? fill Впишите оператор JSONB, возвращающий значение поля как текст.
+```code
+SELECT props___'source' FROM events;
+```
+> ->>
+= -> вернёт jsonb.
+? out Что вернёт запрос?
+```code
+SELECT 0.1 + 0.2 = 0.3, CAST(0.1 + 0.2 AS TEXT);
+```
+> 0 0.3
+> 0, 0.3
+= Сравнение чисел с плавающей точкой ложно, хотя при выводе виден округлённый результат.
+? mc Что показывает разница между rows= (оценка) и actual rows в плане?
++ Насколько точна статистика планировщика; большая разница — повод запустить ANALYZE
+- Сколько строк удалено
+- Количество индексов
+- Ничего важного
+= Плохая оценка ведёт к неудачному плану.
+? mc Когда выбрать материализованное представление?
++ Когда тяжёлый агрегат читают часто, а данные могут обновляться раз в час или день
+- Когда нужны данные с точностью до секунды
+- Для каждой таблицы
+- Никогда
+= Компромисс скорости и свежести.
+? out Что вернёт запрос?
+```code
+WITH RECURSIVE m(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM m WHERE n < 12)
+SELECT COUNT(*), SUM(n) FROM m;
+```
+> 12 78
+> 12, 78
+= Календарь месяцев через рекурсивную CTE, аналог generate_series.
+? fill Впишите функцию PostgreSQL для генерации ряда дат.
+```code
+SELECT ___('2026-01-01'::date, '2026-12-01', interval '1 month');
+```
+> generate_series
+= Удобна для календаря без пропусков.
+? mc Как ограничить доступ менеджера только к заказам его города?
++ Row Level Security с политикой по городу
+- Отдельная база на каждый город
+- Попросить не смотреть чужие
+- Удалить чужие заказы
+= RLS фильтрует строки на уровне базы.

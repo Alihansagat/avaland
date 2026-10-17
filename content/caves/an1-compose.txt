@@ -1,0 +1,301 @@
+@lang id=compose name=Jetpack Compose land=Пещера Compose color=#4285f4 cave=kt track=android step=1
+@about Современный интерфейс Android-приложений на Kotlin: composable-функции, состояние, списки и навигация.
+@why Первая, потому что экран — это то, что видит пользователь и с чего начинается любое Android-приложение. Данные и архитектура из следующих пещер подключаются к этим экранам.
+
+@lesson Composable-функции и разметка
+Интерфейс в Compose описывают функциями с аннотацией `@Composable`. Функция не возвращает View, а описывает, что показать: `Text`, `Button`, `Image`. Когда данные меняются, Compose заново вызывает функцию и обновляет только изменившиеся части.
+Раскладку строят контейнерами: `Column` — сверху вниз, `Row` — слева направо, `Box` — наложение. Внешний вид задают модификаторы в цепочке: `Modifier.padding(16.dp).fillMaxWidth().clickable { }` — порядок важен.
+Цвета и шрифты берут из `MaterialTheme`, превью экрана в Android Studio показывает функция с `@Preview`.
+```code
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.dp
+
+data class Course(val title: String, val lessons: Int, val done: Int)
+
+@Composable
+fun CourseCard(course: Course, onOpen: () -> Unit) {
+    Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+        Column(Modifier.padding(16.dp)) {
+            Text(course.title, style = MaterialTheme.typography.titleMedium)
+            Text("${course.done} из ${course.lessons} уроков", style = MaterialTheme.typography.bodySmall)
+            Spacer(Modifier.height(8.dp))
+            LinearProgressIndicator(progress = { course.done / course.lessons.toFloat() }, modifier = Modifier.fillMaxWidth())
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                TextButton(onClick = onOpen) { Text("Продолжить") }
+            }
+        }
+    }
+}
+
+@Preview
+@Composable
+fun CourseCardPreview() = CourseCard(Course("Kotlin", 8, 3)) {}
+```
+! Composable-функции называют с большой буквы, как компоненты
+! Порядок модификаторов важен: `padding` до `background` и после дают разный результат
+! Размеры — в `dp`, текст — в `sp`
+? mc Что делает аннотация @Composable?
++ Отмечает функцию, которая описывает часть интерфейса Compose
+- Создаёт Activity
+- Делает функцию асинхронной
+- Сохраняет данные
+= Compose вызывает такие функции при отрисовке и перерисовке.
+? mc Какой контейнер располагает элементы слева направо?
++ Row
+- Column
+- Box
+- LazyColumn
+= Column — вертикально, Box — наложением.
+? out Что выведет код?
+```code
+data class Course(val title: String, val lessons: Int, val done: Int)
+val c = Course("Kotlin", 8, 2)
+println("${c.done} из ${c.lessons}: ${(c.done * 100) / c.lessons}%")
+```
+> 2 из 8: 25%
+= Строковый шаблон с вычислением процента.
+? fill Впишите единицу размеров интерфейса в Compose.
+```code
+Modifier.padding(16.___)
+```
+> dp
+= dp — независимые от плотности экрана пиксели.
+
+@lesson Состояние и рекомпозиция
+Состояние в Compose хранят в `mutableStateOf`, обёрнутом в `remember`, чтобы значение пережило перерисовку: `var count by remember { mutableStateOf(0) }`. Изменение состояния вызывает рекомпозицию — повторный вызов функций, которые его читают.
+`remember` теряет значение при повороте экрана; `rememberSaveable` сохраняет простые значения и после пересоздания Activity.
+Хорошая практика — поднятие состояния (state hoisting): компонент получает значение и колбэк изменения снаружи, а не хранит их сам. Тогда его легко переиспользовать и тестировать.
+```code
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.foundation.layout.*
+
+@Composable
+fun QuantityPicker(value: Int, onChange: (Int) -> Unit) {          // без своего состояния
+    Row {
+        Button(onClick = { onChange((value - 1).coerceAtLeast(0)) }) { Text("−") }
+        Text(" $value ")
+        Button(onClick = { onChange(value + 1) }) { Text("+") }
+    }
+}
+
+@Composable
+fun CartItem(title: String, price: Int) {
+    var qty by rememberSaveable { mutableStateOf(1) }                  // состояние наверху
+    Column {
+        Text(title)
+        QuantityPicker(qty, onChange = { qty = it })
+        Text("Итого: ${qty * price} ₸")
+    }
+}
+```
+! `remember` без `mutableStateOf` не вызовет перерисовку при изменении
+! `rememberSaveable` — чтобы состояние пережило поворот экрана
+! Поднимайте состояние: компонент получает `value` и `onChange`
+? mc Что произойдёт при изменении значения в `mutableStateOf`?
++ Compose перерисует функции, которые читают это значение
+- Приложение перезапустится
+- Ничего
+- Вызовется onCreate
+= Это рекомпозиция.
+? mc Зачем `remember`?
++ Чтобы значение сохранялось между рекомпозициями, а не создавалось заново
+- Чтобы сохранить данные в базу
+- Чтобы ускорить сеть
+- Для анимации
+= Без remember состояние сбрасывалось бы при каждой перерисовке.
+? out Что выведет код?
+```code
+var qty = 1
+val onChange: (Int) -> Unit = { qty = it }
+onChange((qty - 1).coerceAtLeast(0)); onChange((qty - 1).coerceAtLeast(0))
+println(qty)
+```
+> 0
+= coerceAtLeast(0) не даёт уйти ниже нуля.
+? fill Впишите функцию, которая сохраняет состояние и при повороте экрана.
+```code
+var text by ___ { mutableStateOf("") }
+```
+> rememberSaveable
+= rememberSaveable переживает пересоздание Activity.
+
+@lesson Списки и ввод
+Длинные списки рисует `LazyColumn`: создаются только видимые элементы, поэтому прокрутка тысяч строк остаётся плавной. Элементы задают через `items(list, key = { it.id })` — ключ помогает анимациям и сохранению состояния.
+Поле ввода — `TextField` или `OutlinedTextField` со значением из состояния и `onValueChange`. Клавиатуру настраивают через `keyboardOptions` (тип почты, числа), ошибку показывают параметром `isError` и `supportingText`.
+Пустое состояние, загрузка и ошибка — отдельные ветки `when`, как и в любом интерфейсе.
+```code
+import androidx.compose.foundation.lazy.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
+
+data class Note(val id: Long, val text: String)
+
+@Composable
+fun Notes() {
+    var notes by remember { mutableStateOf(listOf<Note>()) }
+    var input by remember { mutableStateOf("") }
+    val valid = input.trim().length >= 2
+
+    OutlinedTextField(
+        value = input, onValueChange = { input = it },
+        label = { Text("Заметка") },
+        isError = input.isNotEmpty() && !valid,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
+    )
+    Button(enabled = valid, onClick = { notes = notes + Note(System.nanoTime(), input.trim()); input = "" }) { Text("Добавить") }
+
+    if (notes.isEmpty()) Text("Пока пусто")
+    else LazyColumn {
+        items(notes, key = { it.id }) { note -> Text(note.text) }
+    }
+}
+```
+! Для длинных списков — `LazyColumn`, не `Column` с `forEach`
+! Давайте элементам стабильный `key`
+! Список в состоянии заменяйте новым (`notes + item`), а не изменяйте на месте
+? mc Почему для списка из 5000 элементов нужен LazyColumn?
++ Он создаёт только видимые элементы, поэтому экран не тормозит
+- Column не поддерживает списки
+- LazyColumn сортирует элементы
+- Это одно и то же
+= Ленивый список экономит память и время отрисовки.
+? out Что выведет код?
+```code
+data class Note(val id: Long, val text: String)
+val a = listOf(Note(1, "x"))
+val b = a + Note(2, "y")
+println("${a.size} ${b.size} ${a === b}")
+```
+> 1 2 false
+= Оператор + создаёт новый список, исходный не меняется.
+? fill Впишите параметр TextField, который вызывается при вводе текста.
+```code
+TextField(value = text, ___ = { text = it })
+```
+> onValueChange
+= onValueChange получает новое значение поля.
+? mc Зачем `key` в items?
++ Чтобы Compose правильно сопоставлял элементы при изменении списка и сохранял их состояние
+- Для сортировки
+- Для подсветки
+- Это обязательный id базы
+= Ключи помогают при вставке и удалении элементов.
+
+@lesson Навигация и тема
+Переходы между экранами делает Navigation Compose: `NavHost` с маршрутами и `navController.navigate("course/42")`. Аргументы маршрута читают из `backStackEntry`. В новых версиях маршруты задают типобезопасно сериализуемыми классами.
+Кнопка «назад» работает автоматически через back stack, а `popBackStack()` возвращает на предыдущий экран.
+Оформление задаёт `MaterialTheme` с цветовой схемой: светлая и тёмная тема, динамические цвета Android 12+. Цвета берут из `MaterialTheme.colorScheme`, а не пишут вручную в каждом экране.
+```code
+import androidx.compose.runtime.Composable
+import androidx.compose.material3.*
+import androidx.navigation.compose.*
+import androidx.navigation.NavType
+import androidx.navigation.navArgument
+
+@Composable
+fun AppNav() {
+    val nav = rememberNavController()
+    NavHost(navController = nav, startDestination = "courses") {
+        composable("courses") {
+            CourseList(onOpen = { id -> nav.navigate("course/$id") })
+        }
+        composable("course/{id}", arguments = listOf(navArgument("id") { type = NavType.LongType })) { entry ->
+            val id = entry.arguments?.getLong("id") ?: 0L
+            CourseScreen(id = id, onBack = { nav.popBackStack() })
+        }
+    }
+}
+
+@Composable
+fun AvalandTheme(dark: Boolean, content: @Composable () -> Unit) {
+    MaterialTheme(colorScheme = if (dark) darkColorScheme() else lightColorScheme(), content = content)
+}
+```
+! Экран получает колбэки навигации (`onOpen`, `onBack`), а не сам NavController
+! Аргументы — простые id, данные экран загружает сам
+! Цвета — из `MaterialTheme.colorScheme`, чтобы работала тёмная тема
+? mc Как перейти на экран курса с id 7?
++ navController.navigate("course/7")
+- startActivity(Course(7))
+- NavHost(7)
+- popBackStack(7)
+= Маршрут с аргументом формирует адрес экрана.
+? mc Почему экрану лучше передать `onOpen: (Long) -> Unit`, а не NavController?
++ Экран не зависит от навигации, его проще переиспользовать и тестировать
+- NavController нельзя передавать
+- Так быстрее
+- Это требование Kotlin
+= Поднятие событий — тот же принцип, что и поднятие состояния.
+? fill Впишите метод NavController для возврата на предыдущий экран.
+```code
+nav.___()
+```
+> popBackStack
+= popBackStack снимает текущий экран со стека.
+? out Что выведет код?
+```code
+val route = "course/{id}"
+val actual = "course/42"
+val id = actual.removePrefix(route.substringBefore("{")).toLong()
+println(id + 1)
+```
+> 43
+= Из маршрута извлечён аргумент 42.
+
+@exam
+? mc Что вызывает рекомпозицию в Compose?
++ Изменение состояния, которое читает composable-функция
+- Таймер каждые 16 мс
+- Вызов onCreate
+- Нажатие любой кнопки на экране
+= Compose перерисовывает только зависимые от изменённого состояния части.
+? fill Впишите контейнер, который располагает элементы сверху вниз.
+```code
+___ { Text("A"); Text("B") }
+```
+> Column
+= Column — вертикальная раскладка.
+? mc Что такое state hoisting?
++ Вынос состояния из компонента наверх: компонент получает значение и колбэк изменения
+- Сохранение состояния в базу
+- Удаление состояния
+- Анимация подъёма
+= Так компоненты становятся переиспользуемыми.
+? out Что выведет код?
+```code
+val items = (1..5).toList()
+println(items.filter { it % 2 == 1 }.joinToString("-"))
+```
+> 1-3-5
+= Нечётные элементы через дефис.
+? mc Что сохранит значение счётчика при повороте экрана?
++ rememberSaveable { mutableStateOf(0) }
+- remember { 0 }
+- var count = 0
+- val count by lazy { 0 }
+= rememberSaveable сохраняет состояние в Bundle.
+? mc Чем Modifier.padding(16.dp).background(Color.Red) отличается от обратного порядка?
++ В первом случае фон не заполняет отступ, во втором — заполняет
+- Ничем
+- Первый не скомпилируется
+- Во втором нет отступа
+= Модификаторы применяются по порядку.
+? fill Впишите ленивый вертикальный список Compose.
+```code
+___ { items(list) { Text(it) } }
+```
+> LazyColumn
+= LazyColumn рисует только видимые элементы.
+? mc Где задать цвета приложения для светлой и тёмной темы?
++ В MaterialTheme через colorScheme
+- В каждом Text вручную
+- В AndroidManifest
+- В build.gradle
+= Тема задаёт цвета для всего дерева composable-функций.

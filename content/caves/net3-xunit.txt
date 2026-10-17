@@ -1,0 +1,303 @@
+@lang id=xunit name=xUnit и тестирование .NET land=Пещера тестов .NET color=#9b4f96 cave=cs track=dotnet step=3
+@about Тесты в .NET: xUnit, FluentAssertions, моки NSubstitute и интеграционные тесты API через WebApplicationFactory.
+@why Последняя, потому что тестируют сервисы, эндпоинты и работу с базой из первых двух пещер. Без тестов в команду .NET почти не берут.
+
+@lesson Модульные тесты на xUnit
+Тестовый проект создают `dotnet new xunit -n Shop.Tests` и добавляют ссылку на основной проект. Тест — метод с атрибутом `[Fact]`, параметризованный — `[Theory]` с `[InlineData(...)]`.
+Проверки: `Assert.Equal(expected, actual)`, `Assert.True`, `Assert.Throws<T>(() => ...)`. Библиотека FluentAssertions даёт читаемые проверки: `result.Should().Be(900)`, `list.Should().HaveCount(3)`.
+xUnit создаёт новый экземпляр класса тестов для каждого теста — подготовку пишут в конструкторе. Запуск — `dotnet test`.
+```code
+using Xunit;
+
+public class PriceCalculator
+{
+    public decimal Total(decimal sum, int discountPercent)
+    {
+        if (discountPercent is < 0 or > 100) throw new ArgumentOutOfRangeException(nameof(discountPercent));
+        return sum * (100 - discountPercent) / 100;
+    }
+}
+
+public class PriceCalculatorTests
+{
+    private readonly PriceCalculator _calc = new();     // новый для каждого теста
+
+    [Fact]
+    public void Applies_discount() => Assert.Equal(900m, _calc.Total(1000m, 10));
+
+    [Theory]
+    [InlineData(1000, 0, 1000)]
+    [InlineData(1000, 50, 500)]
+    [InlineData(0, 30, 0)]
+    public void Table(decimal sum, int d, decimal expected) => Assert.Equal(expected, _calc.Total(sum, d));
+
+    [Fact]
+    public void Rejects_wrong_discount() =>
+        Assert.Throws<ArgumentOutOfRangeException>(() => _calc.Total(100m, 150));
+}
+```
+! `[Fact]` — один случай, `[Theory]` + `[InlineData]` — таблица случаев
+! Новый экземпляр класса на каждый тест — тесты не мешают друг другу
+! Имя теста описывает поведение
+? mc Какой атрибут нужен для теста с несколькими наборами данных?
++ [Theory] вместе с [InlineData]
+- [Fact]
+- [Test]
+- [DataRow] без атрибута теста
+= Theory прогоняет метод для каждого набора.
+? out Что выведет код?
+```code
+decimal Total(decimal sum, int d) => sum * (100 - d) / 100;
+Console.WriteLine(Total(200m, 25));
+```
+> 150
+= 25% скидки от 200.
+? fill Впишите метод xUnit, проверяющий равенство.
+```code
+Assert.___(expected, actual);
+```
+> Equal
+= Assert.Equal сравнивает ожидаемое и фактическое.
+? mc Когда xUnit создаёт экземпляр класса тестов?
++ Перед каждым тестом заново
+- Один раз на все тесты
+- Один раз на сборку
+- Никогда
+= Это изолирует тесты друг от друга.
+
+@lesson Моки с NSubstitute
+Подставные зависимости создаёт NSubstitute: `var gateway = Substitute.For<IPaymentGateway>()`. Поведение задают `gateway.Charge(500).Returns(true)`, проверяют вызовы — `gateway.Received(1).Charge(500)` или `DidNotReceive()`.
+Аргументы-заполнители: `Arg.Any<int>()`, `Arg.Is<string>(s => s.Contains("@"))`. Асинхронные методы возвращают `Task` — `.Returns(Task.FromResult(true))` или просто `.Returns(true)` для `Task<bool>`.
+Мокайте только внешний мир (платежи, почта, время через `TimeProvider`), а не внутреннюю логику.
+```code
+using NSubstitute;
+using Xunit;
+
+public interface IPaymentGateway { Task<bool> ChargeAsync(decimal amount); }
+public interface IMailer { Task SendAsync(string to, string text); }
+
+public class CheckoutService(IPaymentGateway gateway, IMailer mailer)
+{
+    public async Task<string> PayAsync(string email, decimal amount)
+    {
+        if (!await gateway.ChargeAsync(amount)) return "DECLINED";
+        await mailer.SendAsync(email, $"Оплата {amount} ₸ прошла");
+        return "PAID";
+    }
+}
+
+public class CheckoutServiceTests
+{
+    private readonly IPaymentGateway _gateway = Substitute.For<IPaymentGateway>();
+    private readonly IMailer _mailer = Substitute.For<IMailer>();
+
+    [Fact]
+    public async Task Sends_receipt_when_paid()
+    {
+        _gateway.ChargeAsync(5000m).Returns(true);
+        var result = await new CheckoutService(_gateway, _mailer).PayAsync("ada@mail.kz", 5000m);
+        Assert.Equal("PAID", result);
+        await _mailer.Received(1).SendAsync("ada@mail.kz", Arg.Is<string>(t => t.Contains("5000")));
+    }
+
+    [Fact]
+    public async Task No_receipt_when_declined()
+    {
+        _gateway.ChargeAsync(Arg.Any<decimal>()).Returns(false);
+        await new CheckoutService(_gateway, _mailer).PayAsync("ada@mail.kz", 5000m);
+        await _mailer.DidNotReceive().SendAsync(Arg.Any<string>(), Arg.Any<string>());
+    }
+}
+```
+! Асинхронные тесты — `async Task`, не `async void`
+! `Received` и `DidNotReceive` проверяют взаимодействие
+! Время подставляйте через `TimeProvider`, а не `DateTime.Now`
+? mc Что делает `Substitute.For<IMailer>()`?
++ Создаёт подставной объект интерфейса, поведение и вызовы которого можно настраивать и проверять
+- Отправляет письмо
+- Создаёт реальный SMTP-клиент
+- Удаляет интерфейс
+= Это мок в NSubstitute.
+? mc Почему тест не должен зависеть от DateTime.Now?
++ Результат будет меняться в зависимости от времени запуска, тест станет нестабильным
+- DateTime.Now медленный
+- Это запрещено в C#
+- Тесты не видят часы
+= Время подставляют через TimeProvider или параметр.
+? out Что выведет код?
+```code
+var sent = new List<string>();
+Func<decimal, bool> charge = a => a <= 10_000m;
+string Pay(decimal amount) { if (!charge(amount)) return "DECLINED"; sent.Add("receipt"); return "PAID"; }
+Console.WriteLine($"{Pay(20_000m)} {Pay(500m)} {sent.Count}");
+```
+> DECLINED PAID 1
+= Первый платёж отклонён, второй прошёл — квитанция одна.
+? fill Впишите метод NSubstitute, проверяющий отсутствие вызова.
+```code
+await mailer.___().SendAsync(Arg.Any<string>(), Arg.Any<string>());
+```
+> DidNotReceive
+= DidNotReceive утверждает, что вызова не было.
+
+@lesson Интеграционные тесты API
+`WebApplicationFactory<Program>` поднимает приложение в памяти и даёт `HttpClient` для настоящих HTTP-запросов без открытия порта. Тест проходит весь путь: маршрутизация, валидация, сериализация, middleware.
+Зависимости подменяют в `WithWebHostBuilder(b => b.ConfigureServices(...))`: например, вместо настоящей почты — фальшивую. Для базы используют Testcontainers с PostgreSQL или отдельную тестовую базу.
+Чтобы фабрика нашла класс `Program` в Minimal API, в конце `Program.cs` добавляют `public partial class Program {}`.
+```code
+using System.Net;
+using System.Net.Http.Json;
+using Microsoft.AspNetCore.Mvc.Testing;
+using Xunit;
+
+public class ProductsApiTests(WebApplicationFactory<Program> factory) : IClassFixture<WebApplicationFactory<Program>>
+{
+    [Fact]
+    public async Task Get_unknown_product_returns_404()
+    {
+        var client = factory.CreateClient();
+        var res = await client.GetAsync("/api/products/999");
+        Assert.Equal(HttpStatusCode.NotFound, res.StatusCode);
+    }
+
+    [Fact]
+    public async Task Create_product_returns_201_with_location()
+    {
+        var client = factory.CreateClient();
+        var res = await client.PostAsJsonAsync("/api/products", new { name = "Клавиатура", price = 15000 });
+        Assert.Equal(HttpStatusCode.Created, res.StatusCode);
+        Assert.NotNull(res.Headers.Location);
+        var body = await res.Content.ReadFromJsonAsync<Dictionary<string, object>>();
+        Assert.Equal("Клавиатура", body!["name"].ToString());
+    }
+}
+```
+! `WebApplicationFactory` — настоящий HTTP-конвейер без сети
+! `IClassFixture` переиспользует одно приложение на весь класс тестов
+! Подменяйте внешние сервисы в `ConfigureServices`
+? mc Что проверяет интеграционный тест через WebApplicationFactory?
++ Весь конвейер запроса: маршруты, middleware, валидацию, сериализацию и ответы
+- Только одну функцию
+- Только SQL
+- Интерфейс в браузере
+= Приложение поднимается целиком в памяти.
+? mc Зачем `public partial class Program {}` в Minimal API?
++ Чтобы тестовый проект мог сослаться на класс Program для WebApplicationFactory<Program>
+- Для ускорения
+- Чтобы включить Swagger
+- Это требование Docker
+= Класс Program в Minimal API по умолчанию недоступен снаружи.
+? fill Впишите метод, отправляющий объект как JSON в POST-запросе.
+```code
+await client.___("/api/orders", order);
+```
+> PostAsJsonAsync
+= PostAsJsonAsync сериализует объект в JSON.
+? out Что выведет код?
+```code
+var codes = new Dictionary<int, string> { [200] = "OK", [201] = "Created", [404] = "NotFound" };
+Console.WriteLine(codes[201] + " " + codes.ContainsKey(500));
+```
+> Created False
+= 201 — Created, кода 500 в словаре нет.
+
+@lesson CI, покрытие и качество
+Тесты запускают в CI: GitHub Actions с `actions/setup-dotnet`, затем `dotnet restore`, `dotnet build --no-restore`, `dotnet test --no-build`. Pull request с красными тестами не сливают.
+Покрытие собирает coverlet: `dotnet test --collect:"XPlat Code Coverage"`, отчёт строит ReportGenerator. Цель — проверить важные сценарии, а не добиться 100%.
+Качество кода поддерживают анализаторы: `<TreatWarningsAsErrors>true</TreatWarningsAsErrors>`, nullable-ссылки `<Nullable>enable</Nullable>` и `dotnet format` — единый стиль кода в команде.
+```code
+# .github/workflows/dotnet.yml
+name: build-and-test
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "9.0.x"
+      - run: dotnet restore
+      - run: dotnet build --no-restore -c Release
+      - run: dotnet test --no-build -c Release --collect:"XPlat Code Coverage"
+      - run: dotnet format --verify-no-changes
+```
+! Тесты в CI на каждый pull request
+! `Nullable` включён — меньше NullReferenceException
+! `dotnet format --verify-no-changes` в CI держит единый стиль
+? mc Что даёт `<Nullable>enable</Nullable>`?
++ Компилятор предупреждает о возможном null там, где он не ожидается
+- Запрещает null во всей программе
+- Ускоряет код
+- Включает базу данных
+= Nullable reference types ловят ошибки при компиляции.
+? mc Зачем запускать `dotnet format --verify-no-changes` в CI?
++ Чтобы сборка упала, если код не отформатирован по правилам команды
+- Чтобы отформатировать код в проде
+- Чтобы удалить тесты
+- Чтобы собрать покрытие
+= Единый стиль проверяется автоматически.
+? fill Впишите команду запуска тестов .NET.
+```code
+dotnet ___
+```
+> test
+= dotnet test запускает тесты решения.
+? out Что выведет код?
+```code
+string? name = null;
+Console.WriteLine((name ?? "гость").Length);
+```
+> 5
+= Оператор ?? подставляет значение по умолчанию вместо null.
+
+@exam
+? mc Чем [Fact] отличается от [Theory]?
++ Fact — тест без параметров, Theory — тест с наборами данных
+- Ничем
+- Theory быстрее
+- Fact только для async
+= Theory требует источник данных, например InlineData.
+? mc Какой тест поднимает приложение в памяти и шлёт HTTP-запросы?
++ Интеграционный с WebApplicationFactory
+- Модульный с NSubstitute
+- Ручной через Postman
+- Нагрузочный
+= Это стандартный способ тестировать API в .NET.
+? out Что выведет код?
+```code
+var cases = new[] { (1000m, 10, 900m), (500m, 0, 500m), (100m, 50, 40m) };
+Console.WriteLine(cases.Count(c => c.Item1 * (100 - c.Item2) / 100 == c.Item3));
+```
+> 2
+= Третий случай неверный: 50% от 100 — это 50.
+? fill Впишите метод NSubstitute для настройки возвращаемого значения.
+```code
+repo.FindAsync(1).___(product);
+```
+> Returns
+= Returns задаёт ответ подставного объекта.
+? mc Асинхронный тест объявлен как `async void`. В чём проблема?
++ Тестовый раннер не дождётся завершения и не увидит исключения
+- Не скомпилируется
+- Тест станет быстрее
+- Ничего
+= Асинхронные тесты возвращают Task.
+? mc Что мокать при тестировании сервиса заказов?
++ Платёжный шлюз и отправку почты
+- Расчёт итоговой суммы заказа
+- Сам сервис заказов
+- Ничего никогда
+= Внешние зависимости, а не тестируемую логику.
+? fill Впишите интерфейс xUnit для общего контекста тестов класса.
+```code
+public class ApiTests : ___<WebApplicationFactory<Program>> {}
+```
+> IClassFixture
+= IClassFixture создаёт общий объект на все тесты класса.
+? mc Покрытие кода 95%, но в проде упал сценарий оплаты. Что это значит?
++ Покрытие не гарантирует проверку важных сценариев; нужен тест на этот сценарий
+- Покрытия мало, нужно 100%
+- Тесты не нужны
+- Это ошибка CI
+= Метрика покрытия показывает выполненные строки, а не правильность проверок.

@@ -1,0 +1,439 @@
+@lang id=skl name=scikit-learn land=Пещера scikit-learn color=#e0a030 cave=py track=ml step=4
+@about Классическое машинное обучение: регрессия, классификация, кластеризация, метрики и честная проверка моделей.
+@why Четвёртая, потому что модели получают на вход подготовленные в pandas признаки (массивы NumPy), а их качество оценивают графиками Matplotlib. В реальных компаниях большинство задач ML решаются именно классическими моделями.
+
+@lesson Задача ML и единый API
+Модель учится на примерах: матрица признаков `X` (строки — объекты, столбцы — признаки) и целевая переменная `y`. Если `y` — число (цена), это регрессия; если класс (уйдёт клиент или нет) — классификация; если `y` нет вообще — обучение без учителя.
+У всех моделей scikit-learn одинаковый интерфейс: создать объект с гиперпараметрами, вызвать `fit(X, y)`, затем `predict(X_new)`. Преобразователи данных (масштабирование, кодирование) имеют `fit` и `transform`.
+Модель проверяют на данных, которых она не видела: `train_test_split` отделяет тестовую часть. Оценка на обучающих данных всегда слишком оптимистична.
+```code
+import numpy as np
+from sklearn.model_selection import train_test_split
+from sklearn.neighbors import KNeighborsClassifier
+
+rng = np.random.default_rng(0)
+X = rng.normal(size=(200, 2))
+y = (X[:, 0] + X[:, 1] > 0).astype(int)      # класс 1, если сумма признаков > 0
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=42)
+print(X_train.shape, X_test.shape)           # (150, 2) (50, 2)
+
+model = KNeighborsClassifier(n_neighbors=5)
+model.fit(X_train, y_train)
+print(model.predict([[2.0, 1.0], [-1.5, -0.5]]))   # [1 0]
+print(model.score(X_test, y_test))                 # 0.9 — доля верных ответов на тесте
+```
+! `X` всегда двумерный: даже один объект передают как `[[...]]`
+! Тестовую выборку не трогают до финальной оценки
+! `random_state` делает разбиение воспроизводимым
+? mc Прогноз количества продаж на завтра — это какая задача?
++ Регрессия
+- Классификация
+- Кластеризация
+- Понижение размерности
+= Целевая переменная — число, значит регрессия.
+? out Что выведет код?
+```code
+import numpy as np
+from sklearn.model_selection import train_test_split
+X = np.arange(40).reshape(20, 2)
+y = np.arange(20)
+a, b, c, d = train_test_split(X, y, test_size=0.2, random_state=0)
+print(a.shape, b.shape, c.shape)
+```
+> (16, 2) (4, 2) (16,)
+= 20 объектов: 16 в train, 4 в test; y_train имеет форму (16,).
+? mc Почему нельзя оценивать модель на тех же данных, на которых она обучалась?
+- Так нельзя технически
++ Модель могла запомнить эти данные, и оценка не покажет, как она работает на новых
+- Это слишком долго
+- Метрики не считаются на train
+= Цель — качество на новых данных; его честно показывает только отложенная выборка.
+? fill Впишите метод, который обучает модель.
+```code
+model.___(X_train, y_train)
+```
+> fit
+= fit обучает модель на признаках и ответах.
+? mc Что такое гиперпараметр?
+- Признак в X
+- Ответ модели
++ Настройка модели, которую задают до обучения, например n_neighbors
+- Коэффициент, найденный при обучении
+= Гиперпараметры задаёт человек, параметры (веса) модель находит сама при fit.
+
+@lesson Регрессия и её метрики
+Линейная регрессия ищет веса `w` и смещение `b`, чтобы `X @ w + b` было как можно ближе к `y`. После `fit` веса лежат в `coef_`, смещение — в `intercept_`. Это быстрая и понятная базовая модель, с неё начинают любую задачу регрессии.
+Качество регрессии меряют так: MAE — средняя абсолютная ошибка в единицах целевой переменной, RMSE — корень из средней квадратичной ошибки (сильнее штрафует большие промахи), R² — доля объяснённой дисперсии (1 — идеально, 0 — не лучше среднего).
+Ridge и Lasso — линейные модели с регуляризацией: штраф за большие веса снижает переобучение. Lasso ещё и обнуляет веса бесполезных признаков.
+```code
+import numpy as np
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+
+X = np.array([[1], [2], [3], [4], [5]], dtype=float)
+y = np.array([3, 5, 7, 9, 11], dtype=float)          # y = 2x + 1
+
+lr = LinearRegression().fit(X, y)
+print(round(lr.coef_[0], 3), round(lr.intercept_, 3))   # 2.0 1.0
+print(lr.predict([[10]]))                               # [21.]
+
+y_true = np.array([100, 200, 300])
+y_pred = np.array([110, 190, 330])
+print(mean_absolute_error(y_true, y_pred))              # 16.666666666666668
+print(round(mean_squared_error(y_true, y_pred) ** 0.5, 2))   # 19.15
+print(round(r2_score(y_true, y_pred), 3))               # 0.945
+```
+! Начинайте с простой модели — она задаёт планку, которую должна побить сложная
+! MAE легко объяснить бизнесу: «ошибаемся в среднем на 16 тысяч»
+! Регуляризация нужна, когда признаков много, а данных мало
+? out Что выведет код?
+```code
+import numpy as np
+from sklearn.linear_model import LinearRegression
+X = np.array([[0], [1], [2]])
+y = np.array([5, 8, 11])
+m = LinearRegression().fit(X, y)
+print(round(m.coef_[0], 2), round(m.intercept_, 2))
+```
+> 3.0 5.0
+= Точки лежат на прямой y = 3x + 5.
+? out Что выведет код?
+```code
+from sklearn.metrics import mean_absolute_error
+print(mean_absolute_error([10, 20, 30], [12, 18, 30]))
+```
+> 1.3333333333333333
+= Ошибки 2, 2 и 0, среднее 4 / 3.
+? mc R² модели на тесте равен 0. Что это значит?
+- Модель идеальна
++ Модель предсказывает не лучше, чем постоянное среднее значение
+- Модель не обучилась из-за ошибки
+- Все прогнозы равны нулю
+= R² = 0 — уровень константного прогноза средним; отрицательный R² — ещё хуже.
+? mc Чем Lasso отличается от обычной линейной регрессии?
++ Добавляет штраф за сумму модулей весов и может обнулить лишние признаки
+- Работает только с классами
+- Не имеет коэффициентов
+- Всегда точнее
+= L1-регуляризация отбирает признаки, зануляя неважные веса.
+
+@lesson Классификация и метрики
+Для классификации часто начинают с логистической регрессии: она выдаёт вероятность класса через `predict_proba`, а `predict` сравнивает её с порогом 0.5. Деревья решений и случайный лес хорошо работают на табличных данных без масштабирования.
+Accuracy — доля верных ответов — обманчива при дисбалансе: если отток всего 5%, модель «никто не уйдёт» даёт 95% accuracy и бесполезна. Поэтому смотрят precision (сколько найденных действительно положительные), recall (сколько положительных нашли) и F1 — их среднее гармоническое.
+Матрица ошибок `confusion_matrix` показывает всё сразу: строки — истинные классы, столбцы — предсказанные. Порог вероятности меняют под задачу: для поиска мошенничества важнее recall.
+```code
+import numpy as np
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
+
+y_true = np.array([1, 1, 1, 0, 0, 0, 0, 0, 0, 0])
+y_pred = np.array([1, 1, 0, 1, 0, 0, 0, 0, 0, 0])
+
+print(accuracy_score(y_true, y_pred))            # 0.8
+print(round(precision_score(y_true, y_pred), 3)) # 0.667
+print(round(recall_score(y_true, y_pred), 3))    # 0.667
+print(round(f1_score(y_true, y_pred), 3))        # 0.667
+print(confusion_matrix(y_true, y_pred))
+# [[6 1]
+#  [1 2]]
+
+from sklearn.linear_model import LogisticRegression
+X = np.array([[1], [2], [3], [7], [8], [9]])
+y = np.array([0, 0, 0, 1, 1, 1])
+clf = LogisticRegression().fit(X, y)
+print(clf.predict([[2], [8]]))                    # [0 1]
+print(clf.predict_proba([[5]]).round(2))          # [[0.5 0.5]]
+```
+! При дисбалансе классов accuracy почти бесполезна — смотрите recall, precision и F1
+! Precision: «из тех, кого назвали положительными, сколько правда положительные»
+! Recall: «из всех положительных скольких нашли»
+? out Что выведет код?
+```code
+from sklearn.metrics import accuracy_score
+print(accuracy_score([1, 0, 1, 1], [1, 1, 1, 0]))
+```
+> 0.5
+= Совпали 2 из 4.
+? out Что выведет код?
+```code
+from sklearn.metrics import recall_score
+print(recall_score([1, 1, 1, 1, 0], [1, 1, 0, 0, 0]))
+```
+> 0.5
+= Из четырёх положительных найдены два.
+? mc В задаче поиска мошенничества мошенников 1%. Модель всегда отвечает «не мошенник». Её accuracy 99%. Что не так?
++ Recall равен нулю: модель не находит ни одного мошенника
+- Всё хорошо, 99% — отличный результат
+- Нужно поднять accuracy до 100%
+- Модель переобучилась
+= При сильном дисбалансе accuracy скрывает, что модель не решает задачу.
+? mc Что показывают строки матрицы ошибок в scikit-learn?
++ Истинные классы
+- Предсказанные классы
+- Признаки
+- Эпохи обучения
+= Строки — истинные метки, столбцы — предсказанные.
+? fill Впишите метод, который возвращает вероятности классов.
+```code
+p = clf.___(X_test)[:, 1]
+```
+> predict_proba
+= predict_proba возвращает вероятность каждого класса.
+
+@lesson Предобработка и Pipeline
+Многим моделям (линейным, KNN, SVM, нейросетям) нужны признаки одного масштаба: `StandardScaler` вычитает среднее и делит на стандартное отклонение. Категории превращает в числа `OneHotEncoder`. Разные столбцы обрабатывает `ColumnTransformer`.
+Главная ошибка новичков — утечка данных: если считать среднее для масштабирования на всей выборке, информация из теста попадает в обучение. Преобразователь обучают только на train: `fit` на train, `transform` на train и test.
+`Pipeline` склеивает предобработку и модель в один объект: `fit` и `predict` вызываются один раз, а утечек при кросс-валидации не бывает. Пайплайн легко сохранить и выкатить в прод.
+```code
+import pandas as pd
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.linear_model import LogisticRegression
+
+df = pd.DataFrame({
+    "age": [25, 40, 33, 51, 22, 46, 38, 29],
+    "plan": ["basic", "pro", "basic", "pro", "basic", "pro", "basic", "pro"],
+    "months": [2, 30, 5, 48, 1, 26, 3, 20],
+    "churn": [1, 0, 1, 0, 1, 0, 1, 0],
+})
+X, y = df.drop(columns="churn"), df["churn"]
+
+prep = ColumnTransformer([
+    ("num", StandardScaler(), ["age", "months"]),
+    ("cat", OneHotEncoder(handle_unknown="ignore"), ["plan"]),
+])
+pipe = Pipeline([("prep", prep), ("model", LogisticRegression())])
+pipe.fit(X, y)
+new = pd.DataFrame({"age": [30], "plan": ["basic"], "months": [2]})
+print(pipe.predict(new))                         # [1]
+print(pipe.named_steps["prep"].transform(new).shape)   # (1, 4)
+```
+! Любой `fit` предобработки — только на обучающих данных
+! `handle_unknown="ignore"` спасает, когда в новых данных появилась невиданная категория
+! Pipeline — стандарт для продакшена: одна вещь, которую сохраняют и загружают
+? mc Что такое утечка данных при масштабировании?
++ Среднее и отклонение посчитаны на всей выборке, включая тест, и модель косвенно «видела» тест
+- Масштабирование удаляет признаки
+- Данные утекают в интернет
+- Модель обучается слишком долго
+= Статистики для предобработки считают только на train.
+? out Что выведет код?
+```code
+import numpy as np
+from sklearn.preprocessing import StandardScaler
+x = np.array([[1.0], [2.0], [3.0]])
+z = StandardScaler().fit_transform(x)
+print(round(z.mean(), 6), round(z.std(), 6))
+```
+> 0.0 1.0
+= После стандартизации среднее 0 и отклонение 1.
+? out Что выведет код?
+```code
+import numpy as np
+from sklearn.preprocessing import OneHotEncoder
+enc = OneHotEncoder().fit(np.array([["red"], ["green"], ["blue"]]))
+print(enc.transform([["green"]]).toarray())
+```
+> [[0. 1. 0.]]
+= Категории сортируются: blue, green, red; green — второй столбец.
+? fill Впишите класс, который объединяет шаги предобработки и модель.
+```code
+pipe = ___([("scale", StandardScaler()), ("model", LogisticRegression())])
+```
+> Pipeline
+= Pipeline выполняет шаги по порядку при fit и predict.
+
+@lesson Кросс-валидация, подбор и ансамбли
+Одно разбиение на train и test может случайно оказаться удачным. Кросс-валидация делит данные на k частей и k раз обучает модель, каждый раз оставляя другую часть для проверки: `cross_val_score(model, X, y, cv=5)` возвращает 5 оценок.
+Гиперпараметры подбирают перебором с кросс-валидацией: `GridSearchCV` проверяет все комбинации из сетки, `RandomizedSearchCV` — случайные. Лучшие параметры — в `best_params_`, лучшая модель — в `best_estimator_`.
+Ансамбли объединяют много деревьев. Случайный лес (`RandomForestClassifier`) усредняет независимые деревья и устойчив к переобучению; градиентный бустинг (`HistGradientBoostingClassifier`, XGBoost, CatBoost) строит деревья последовательно, исправляя ошибки, и часто даёт лучшее качество на таблицах.
+```code
+from sklearn.datasets import load_iris
+from sklearn.model_selection import cross_val_score, GridSearchCV
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.tree import DecisionTreeClassifier
+
+X, y = load_iris(return_X_y=True)
+print(X.shape)                                   # (150, 4)
+
+scores = cross_val_score(DecisionTreeClassifier(random_state=0), X, y, cv=5)
+print(len(scores), round(scores.mean(), 2))      # 5 0.96
+
+grid = GridSearchCV(RandomForestClassifier(random_state=0),
+                    {"n_estimators": [50, 100], "max_depth": [2, 4]}, cv=5)
+grid.fit(X, y)
+print(sorted(grid.best_params_))                 # ['max_depth', 'n_estimators']
+imp = grid.best_estimator_.feature_importances_
+print(len(imp), round(imp.sum(), 6))             # 4 1.0
+```
+! Сравнивайте модели по среднему и разбросу кросс-валидации, а не по одному числу
+! Тестовую выборку используют один раз в конце, подбор параметров — только на train с CV
+! На табличных данных градиентный бустинг — сильный кандидат по умолчанию
+? out Что выведет код?
+```code
+from sklearn.datasets import load_iris
+X, y = load_iris(return_X_y=True)
+print(X.shape, len(set(y)))
+```
+> (150, 4) 3
+= В ирисах 150 цветков, 4 признака и 3 вида.
+? mc Зачем нужна кросс-валидация?
++ Получить более надёжную оценку качества, усреднив несколько разбиений
+- Ускорить обучение
+- Увеличить количество данных
+- Заменить тестовую выборку на обучающую
+= Одно разбиение может быть случайно удачным или неудачным; k разбиений дают устойчивую оценку.
+? mc Чем случайный лес отличается от градиентного бустинга?
++ Лес строит деревья независимо и усредняет, бустинг строит последовательно, исправляя ошибки предыдущих
+- Лес — линейная модель
+- Бустинг работает только с картинками
+- Ничем
+= Это два главных способа объединять деревья: бэггинг и бустинг.
+? fill Впишите атрибут, в котором GridSearchCV хранит лучшие гиперпараметры.
+```code
+print(grid.___)
+```
+> best_params_
+= best_params_ — словарь лучших значений из сетки.
+
+@lesson Обучение без учителя: KMeans и PCA
+Когда ответов `y` нет, ищут структуру в самих данных. `KMeans` делит объекты на k кластеров: каждый объект относится к ближайшему центру. Число кластеров выбирают по «локтю» графика `inertia_` или по силуэту `silhouette_score`.
+`PCA` (метод главных компонент) сжимает много признаков в несколько новых, сохраняя максимум разброса. Это помогает визуализировать данные в 2D и ускорять модели. `explained_variance_ratio_` показывает долю информации в каждой компоненте.
+Перед KMeans и PCA признаки масштабируют: иначе признак с большими числами (зарплата) задавит признак с маленькими (возраст).
+```code
+import numpy as np
+from sklearn.cluster import KMeans
+from sklearn.decomposition import PCA
+from sklearn.metrics import silhouette_score
+
+rng = np.random.default_rng(0)
+a = rng.normal([0, 0], 0.5, size=(50, 2))
+b = rng.normal([5, 5], 0.5, size=(50, 2))
+X = np.vstack([a, b])
+
+km = KMeans(n_clusters=2, n_init=10, random_state=0).fit(X)
+print(np.bincount(km.labels_))                  # [50 50]
+print(round(silhouette_score(X, km.labels_), 2) > 0.8)   # True
+
+X4 = np.hstack([X, X * 2])                      # 4 признака, но информации на 2
+pca = PCA(n_components=2).fit(X4)
+print(round(pca.explained_variance_ratio_.sum(), 3))   # 1.0
+```
+! Масштабируйте признаки перед KMeans и PCA
+! Номера кластеров произвольны: кластер 0 не «лучше» кластера 1
+! PCA для визуализации — 2 компоненты, для сжатия — столько, чтобы сохранить 90–95% дисперсии
+? mc Какая задача подходит для кластеризации?
++ Разбить клиентов на группы по поведению, когда групп заранее нет
+- Предсказать цену квартиры
+- Определить, спам ли письмо, по размеченным примерам
+- Посчитать среднее
+= Кластеризация ищет группы без готовых ответов.
+? out Что выведет код?
+```code
+import numpy as np
+from sklearn.cluster import KMeans
+X = np.array([[0, 0], [0, 1], [10, 10], [10, 11]])
+km = KMeans(n_clusters=2, n_init=10, random_state=0).fit(X)
+print(km.labels_[0] == km.labels_[1], km.labels_[0] == km.labels_[2])
+```
+> True False
+= Две близкие пары точек попадают в разные кластеры.
+? mc Что показывает `explained_variance_ratio_` у PCA?
+- Точность модели
++ Какую долю разброса данных сохраняет каждая главная компонента
+- Номера кластеров
+- Важность исходных признаков для y
+= Сумма долей показывает, сколько информации осталось после сжатия.
+? fill Впишите параметр KMeans, задающий число кластеров.
+```code
+KMeans(___=4)
+```
+> n_clusters
+= n_clusters — число групп k.
+
+@exam
+? mc Матрица X имеет форму (1000, 12). Что это значит?
++ 1000 объектов, у каждого 12 признаков
+- 12 объектов по 1000 признаков
+- 1000 классов
+- 12 моделей
+= Строки — объекты, столбцы — признаки.
+? out Что выведет код?
+```code
+from sklearn.metrics import precision_score
+print(precision_score([1, 0, 0, 1], [1, 1, 1, 1]))
+```
+> 0.5
+= Модель назвала положительными 4 объекта, из них правда положительные 2.
+? mc Где правильно вызывать `fit` у StandardScaler?
+- На всей выборке до разбиения
++ Только на обучающей выборке, а на тесте — только transform
+- Только на тестовой выборке
+- Не вызывать вообще
+= Иначе статистики теста просочатся в обучение.
+? out Что выведет код?
+```code
+import numpy as np
+from sklearn.linear_model import LinearRegression
+m = LinearRegression().fit(np.array([[1], [2], [3]]), np.array([2, 4, 6]))
+print(m.predict(np.array([[4]])).round(2))
+```
+> [8.]
+= Модель нашла y = 2x, для x = 4 прогноз 8.
+? mc Модель: train accuracy 99%, test accuracy 70%. Что это?
+- Недообучение
++ Переобучение
+- Идеальная модель
+- Утечка данных из train в test
+= Большой разрыв между train и test — признак переобучения.
+? out Что выведет код?
+```code
+from sklearn.metrics import confusion_matrix
+print(confusion_matrix([0, 1, 1, 0], [0, 1, 0, 0]).ravel().tolist())
+```
+> [2, 0, 1, 1]
+= TN = 2, FP = 0, FN = 1, TP = 1.
+? fill Впишите функцию, которая делит данные на обучающую и тестовую части.
+```code
+X_tr, X_te, y_tr, y_te = ___(X, y, test_size=0.2)
+```
+> train_test_split
+= train_test_split из sklearn.model_selection.
+? mc Какая метрика важнее всего для медицинского теста на опасную болезнь?
+- Accuracy
++ Recall: нельзя пропускать больных
+- Precision любой ценой
+- R²
+= Пропуск больного дороже ложной тревоги, поэтому максимизируют recall.
+? out Что выведет код?
+```code
+from sklearn.model_selection import cross_val_score
+from sklearn.datasets import load_iris
+from sklearn.neighbors import KNeighborsClassifier
+X, y = load_iris(return_X_y=True)
+print(len(cross_val_score(KNeighborsClassifier(), X, y, cv=3)))
+```
+> 3
+= cv=3 — три оценки.
+? mc Зачем нужен Pipeline?
++ Объединить предобработку и модель, чтобы избежать утечек и упростить выкатку
+- Ускорить видеокарту
+- Подобрать признаки вручную
+- Заменить pandas
+= Pipeline обучается и применяется как одна модель.
+? mc Какую модель стоит попробовать первой для табличной классификации, чтобы получить базовую планку?
++ Логистическую регрессию
+- Трансформер на миллиард параметров
+- KMeans
+- PCA
+= Простая модель быстро даёт планку, с которой сравнивают сложные.
+? out Что выведет код?
+```code
+import numpy as np
+from sklearn.decomposition import PCA
+X = np.random.default_rng(0).normal(size=(30, 5))
+print(PCA(n_components=2).fit_transform(X).shape)
+```
+> (30, 2)
+= PCA сжимает 5 признаков до 2, число объектов не меняется.

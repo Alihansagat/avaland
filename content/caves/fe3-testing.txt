@@ -1,0 +1,280 @@
+@lang id=jstest name=Тестирование фронтенда land=Пещера тестов color=#7cc46a cave=js track=fe step=3
+@about Vitest, Testing Library и Playwright: как проверять функции, компоненты и целые сценарии пользователя.
+@why Последняя, потому что тестируют то, что уже умеют писать: функции, React-компоненты и страницы Next.js. На собеседованиях джунов почти всегда спрашивают, как вы проверяете свой код.
+
+@lesson Модульные тесты на Vitest
+Модульный тест проверяет одну функцию: дали вход — сравнили выход. Vitest (и похожий Jest) находит файлы `*.test.js`, выполняет блоки `test` (или `it`) и сравнивает результат через `expect(...).toBe(...)`.
+`toBe` сравнивает примитивы и ссылки, `toEqual` — содержимое объектов и массивов, `toThrow` — что функция бросает ошибку. Тесты группируют через `describe`.
+Хороший тест проверяет и обычные случаи, и граничные: пустой ввод, ноль, отрицательные числа, очень длинные строки. Тест должен падать, если код сломать, — иначе он ничего не проверяет.
+```code
+// price.js
+export function total(items, discount = 0) {
+  if (discount < 0 || discount > 1) throw new Error("discount 0..1");
+  const sum = items.reduce((s, i) => s + i.price * i.qty, 0);
+  return Math.round(sum * (1 - discount));
+}
+
+// price.test.js
+import { describe, test, expect } from "vitest";
+import { total } from "./price";
+
+describe("total", () => {
+  test("складывает позиции", () => {
+    expect(total([{ price: 100, qty: 2 }, { price: 50, qty: 1 }])).toBe(250);
+  });
+  test("пустая корзина", () => {
+    expect(total([])).toBe(0);
+  });
+  test("скидка", () => {
+    expect(total([{ price: 1000, qty: 1 }], 0.15)).toBe(850);
+  });
+  test("неверная скидка", () => {
+    expect(() => total([], 2)).toThrow("discount");
+  });
+});
+```
+! Один тест — одна проверяемая идея, понятное название
+! Для объектов и массивов — `toEqual`, не `toBe`
+! Тестируйте граничные случаи: пусто, ноль, ошибки
+? mc Чем `toEqual` отличается от `toBe`?
++ toEqual сравнивает содержимое объектов, toBe — ссылки и примитивы
+- Ничем
+- toBe работает только со строками
+- toEqual медленнее и устарел
+= expect({a: 1}).toBe({a: 1}) упадёт — это разные объекты.
+? out Что выведет код?
+```code
+const total = (items, d = 0) => Math.round(items.reduce((s, i) => s + i.price * i.qty, 0) * (1 - d));
+console.log(total([{ price: 200, qty: 3 }], 0.1), total([]));
+```
+> 540 0
+= 600 со скидкой 10% — 540; пустая корзина — 0.
+? out Что выведет код?
+```code
+console.log({ a: 1 } === { a: 1 }, JSON.stringify({ a: 1 }) === JSON.stringify({ a: 1 }));
+```
+> false true
+= Два разных объекта не равны по ссылке, но совпадают по содержимому.
+? fill Впишите матчер, который проверяет, что функция бросает ошибку.
+```code
+expect(() => parse("")).___();
+```
+> toThrow
+= toThrow принимает функцию, а не результат её вызова.
+
+@lesson Моки и асинхронный код
+Мок — подставная функция вместо настоящей: сетевого запроса, базы, текущего времени. `vi.fn()` создаёт функцию-шпиона, которая запоминает вызовы; `vi.spyOn(obj, "method")` подменяет метод объекта; `vi.mock("./api")` подменяет целый модуль.
+Асинхронный тест — `async`-функция с `await`, или `await expect(promise).resolves/rejects`. Таймеры подменяют через `vi.useFakeTimers()` и прокручивают `vi.advanceTimersByTime(1000)`.
+Проверяют не только результат, но и взаимодействие: `expect(fn).toHaveBeenCalledWith(...)`, `toHaveBeenCalledTimes(1)`. Но слишком много моков делает тест хрупким — мокайте только внешний мир.
+```code
+// user.js
+export async function loadUser(id, fetchFn = fetch) {
+  const res = await fetchFn(`/api/users/${id}`);
+  if (!res.ok) throw new Error("not found");
+  return res.json();
+}
+
+// user.test.js
+import { test, expect, vi } from "vitest";
+import { loadUser } from "./user";
+
+test("возвращает пользователя", async () => {
+  const fake = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 7, name: "Ада" }) });
+  const user = await loadUser(7, fake);
+  expect(user.name).toBe("Ада");
+  expect(fake).toHaveBeenCalledWith("/api/users/7");
+});
+
+test("ошибка 404", async () => {
+  const fake = vi.fn().mockResolvedValue({ ok: false });
+  await expect(loadUser(1, fake)).rejects.toThrow("not found");
+});
+```
+! Передавайте зависимости параметром — такой код легко тестировать без сложных моков
+! Мокайте сеть, время и случайность, а не собственную логику
+! Не забывайте `await` в асинхронных проверках, иначе тест пройдёт впустую
+? mc Зачем мокать fetch в модульном тесте?
++ Чтобы тест не зависел от сети и сервера и выполнялся быстро и стабильно
+- Чтобы ускорить сервер
+- Без мока fetch не существует
+- Чтобы проверить интернет
+= Модульный тест проверяет свою логику изолированно.
+? out Что выведет код?
+```code
+const calls = [];
+const fn = (...args) => { calls.push(args); return 42; };
+fn(1, 2); fn("x");
+console.log(calls.length, JSON.stringify(calls[1]));
+```
+> 2 ["x"]
+= Так работает шпион: запоминает все вызовы и аргументы.
+? mc Что не так с тестом `test("load", () => { expect(loadUser(1)).resolves.toBe(x) })`?
++ Нет await или return: тест закончится раньше, чем промис проверится
+- resolves не существует
+- Нужно toEqual
+- Ничего
+= Асинхронную проверку нужно дождаться.
+? fill Впишите функцию Vitest, создающую функцию-шпион.
+```code
+const onSave = vi.___();
+```
+> fn
+= vi.fn() записывает вызовы и может возвращать заданные значения.
+
+@lesson Тесты компонентов: Testing Library
+React Testing Library рендерит компонент и предлагает искать элементы так, как их видит пользователь: `getByRole("button", { name: "Сохранить" })`, `getByLabelText("Почта")`, `getByText`. Это заставляет писать доступный интерфейс.
+Действия пользователя имитирует `userEvent`: `await user.type(input, "ada@mail.kz")`, `await user.click(button)`. Проверки — через матчеры jest-dom: `toBeInTheDocument`, `toBeDisabled`, `toHaveValue`.
+`getBy...` падает, если элемента нет; `queryBy...` возвращает null (удобно проверять отсутствие); `findBy...` ждёт появления элемента — для асинхронной загрузки.
+```code
+// SignupForm.test.jsx
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { test, expect, vi } from "vitest";
+import SignupForm from "./SignupForm";
+
+test("кнопка активна только с корректной почтой", async () => {
+  const user = userEvent.setup();
+  const onSignup = vi.fn();
+  render(<SignupForm onSignup={onSignup} />);
+
+  const button = screen.getByRole("button", { name: "Подписаться" });
+  expect(button).toBeDisabled();
+
+  await user.type(screen.getByRole("textbox"), "ada@mail.kz");
+  expect(button).toBeEnabled();
+
+  await user.click(button);
+  expect(onSignup).toHaveBeenCalledWith("ada@mail.kz");
+  expect(screen.queryByText("Ошибка")).not.toBeInTheDocument();
+});
+```
+! Ищите элементы по роли и подписи — как пользователь и скринридер
+! `findBy` — для того, что появится после загрузки
+! Тестируйте поведение, а не внутреннее состояние компонента
+? mc Какой запрос лучше для поиска кнопки «Сохранить»?
++ getByRole("button", { name: "Сохранить" })
+- container.querySelector(".btn-save")
+- getByTestId("save")
+- document.body.children[3]
+= Поиск по роли и имени устойчив к рефакторингу верстки и проверяет доступность.
+? mc Чем `findByText` отличается от `getByText`?
++ findByText ждёт появления элемента и возвращает Promise
+- findByText ищет в других вкладках
+- getByText асинхронный
+- Ничем
+= findBy нужен для данных, которые появляются после запроса.
+? mc Как проверить, что сообщения об ошибке нет на экране?
++ expect(screen.queryByText("Ошибка")).not.toBeInTheDocument()
+- expect(screen.getByText("Ошибка")).toBeNull()
+- screen.findByText("Ошибка")
+- expect(null).toBe(null)
+= getBy бросит исключение при отсутствии элемента, queryBy вернёт null.
+? fill Впишите функцию, которая отображает компонент в тестовом DOM.
+```code
+___(<Counter />);
+```
+> render
+= render из @testing-library/react.
+
+@lesson E2E-тесты на Playwright и CI
+End-to-end тест открывает настоящий браузер и проходит сценарий целиком: зайти на сайт, войти, добавить товар, оплатить. Playwright умеет Chromium, Firefox и WebKit (Safari), сам ждёт появления элементов и делает скриншоты при падении.
+Пирамида тестов: много быстрых модульных, меньше компонентных и интеграционных, немного медленных e2e на критичные сценарии — регистрация, оплата.
+Тесты запускают автоматически в CI (GitHub Actions) на каждый pull request: если тесты красные, код не сливают в main. Это и есть главная польза тестов — они ловят поломки до пользователей.
+```code
+// tests/checkout.spec.ts
+import { test, expect } from "@playwright/test";
+
+test("покупатель оформляет заказ", async ({ page }) => {
+  await page.goto("http://localhost:3000");
+  await page.getByRole("link", { name: "Каталог" }).click();
+  await page.getByRole("button", { name: "В корзину" }).first().click();
+  await page.getByRole("link", { name: /Корзина/ }).click();
+  await expect(page.getByText("1 товар")).toBeVisible();
+  await page.getByRole("button", { name: "Оформить" }).click();
+  await expect(page).toHaveURL(/\/thanks/);
+});
+
+// .github/workflows/test.yml
+// on: pull_request
+// jobs: test: runs-on: ubuntu-latest
+//   steps: checkout → npm ci → npx vitest run → npx playwright install --with-deps → npx playwright test
+```
+! E2E — только для главных сценариев: они медленные и хрупкие
+! Пирамида: модульных больше всего, e2e меньше всего
+! Тесты в CI на каждый pull request — стандарт команд
+? mc Что такое пирамида тестов?
++ Много быстрых модульных тестов, меньше интеграционных и немного e2e
+- Только e2e-тесты
+- Тесты пишут после релиза
+- Три уровня ручного тестирования
+= Так тесты быстрые, дешёвые и всё равно ловят поломки сценариев.
+? mc Что проверяет e2e-тест?
++ Сценарий пользователя целиком в настоящем браузере
+- Одну функцию
+- Только CSS
+- Скорость сервера
+= E2E проходит путь пользователя от начала до конца.
+? fill Впишите метод Playwright для перехода на страницу.
+```code
+await page.___("http://localhost:3000");
+```
+> goto
+= page.goto открывает URL и ждёт загрузки.
+? mc Зачем запускать тесты в CI на каждый pull request?
++ Чтобы сломанный код не попал в main и к пользователям
+- Чтобы ускорить разработку дизайна
+- Это нужно только для open source
+- Чтобы удалить старые тесты
+= CI автоматически проверяет каждое изменение.
+
+@exam
+? mc Какой тест быстрее всего?
++ Модульный тест чистой функции
+- E2E в трёх браузерах
+- Ручная проверка
+- Нагрузочный тест
+= Модульные тесты выполняются за миллисекунды.
+? out Что выведет код?
+```code
+const sum = arr => arr.reduce((a, b) => a + b, 0);
+const cases = [[[], 0], [[1, 2], 3], [[-1, 1], 0]];
+console.log(cases.every(([input, expected]) => sum(input) === expected));
+```
+> true
+= Все три случая проходят — так выглядит табличный тест.
+? fill Впишите матчер для сравнения массивов по содержимому.
+```code
+expect(result).___([1, 2, 3]);
+```
+> toEqual
+= toEqual сравнивает структуру и значения.
+? mc Что мокать в модульном тесте функции, которая читает курс валют из API и считает цену?
++ Запрос к API
+- Арифметику расчёта цены
+- Сам тестируемый модуль
+- Ничего не мокать нельзя
+= Внешний мир заменяем, свою логику проверяем по-настоящему.
+? mc Какой запрос Testing Library подождёт появления элемента?
++ findByRole
+- getByRole
+- queryByRole
+- getAllByRole
+= findBy* возвращает Promise и ждёт до таймаута.
+? mc Тест проходит, даже если удалить проверяемую функцию. О чём это говорит?
++ Тест ничего не проверяет — скорее всего, забыт await или expect
+- Тест отличный
+- Функция не нужна
+- Нужно больше моков
+= Хороший тест падает, когда код ломается.
+? mc Для чего Playwright запускает WebKit?
++ Чтобы проверить сайт в движке Safari
+- Чтобы тестировать Android
+- Это движок Node.js
+- Для серверных тестов
+= WebKit — движок Safari на iPhone и Mac.
+? fill Впишите функцию Vitest для группировки тестов.
+```code
+___("корзина", () => { test(...); });
+```
+> describe
+= describe объединяет связанные тесты.

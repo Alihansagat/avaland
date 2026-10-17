@@ -1,0 +1,433 @@
+@lang id=pd name=pandas land=Пещера pandas color=#7a5cc4 cave=py track=ml step=2
+@about Таблицы данных: загрузка, очистка, группировка и объединение. Главный инструмент аналитика и ML-инженера.
+@why Вторая, потому что pandas построен на NumPy: столбец таблицы — это массив, а фильтры и вычисления — та же векторизация. Почти любой ML-проект начинается с таблицы, которую нужно привести в порядок.
+
+@lesson Series и DataFrame
+`Series` — одномерный столбец значений с индексом (подписями строк). `DataFrame` — таблица из нескольких Series с общим индексом: каждый столбец имеет свой тип.
+Таблицу создают из словаря списков, читают из CSV через `pd.read_csv`, из Excel — `pd.read_excel`. Первые строки показывает `head()`, размер — `shape`, типы столбцов — `dtypes`, сводку по числовым столбцам — `describe()`.
+Столбец берут как `df["price"]`, несколько — списком `df[["name", "price"]]`. Новый столбец создают присваиванием, и он вычисляется сразу для всех строк — векторизация, как в NumPy.
+```code
+import pandas as pd
+
+df = pd.DataFrame({
+    "name": ["Ада", "Алан", "Грейс", "Линус"],
+    "city": ["Алматы", "Астана", "Алматы", "Шымкент"],
+    "salary": [900, 1200, 1500, 700],
+})
+print(df.shape)                 # (4, 3)
+print(df.head(2))
+df["bonus"] = df["salary"] * 0.1
+print(df["bonus"].tolist())     # [90.0, 120.0, 150.0, 70.0]
+print(df["salary"].mean())      # 1075.0
+print(df.describe().loc["max", "salary"])   # 1500.0
+```
+! Один столбец — `df["x"]` (Series), несколько — `df[["x", "y"]]` (DataFrame)
+! Операции над столбцами векторизованы: никаких циклов по строкам
+! `df.info()` показывает типы и число непустых значений в каждом столбце
+? mc Чем `df["price"]` отличается от `df[["price"]]`?
++ Первое — Series (столбец), второе — DataFrame с одним столбцом
+- Ничем
+- Первое — копия, второе — ссылка
+- Второе вызовет ошибку
+= Список имён всегда возвращает таблицу, одно имя — Series.
+? out Что выведет код?
+```code
+import pandas as pd
+df = pd.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6]})
+print(df.shape, len(df.columns))
+```
+> (3, 2) 2
+= 3 строки, 2 столбца.
+? out Что выведет код?
+```code
+import pandas as pd
+s = pd.Series([10, 20, 30], index=["x", "y", "z"])
+print(s["y"], s.sum())
+```
+> 20 60
+= Обращение по метке индекса и сумма значений.
+? fill Впишите метод, который показывает первые строки таблицы.
+```code
+df.___(5)
+```
+> head
+= head(n) возвращает первые n строк.
+
+@lesson Выбор строк: loc, iloc и фильтры
+`loc` выбирает по меткам индекса и именам столбцов: `df.loc[3, "price"]`, `df.loc[df["age"] > 30, ["name"]]`. Срез в `loc` включает правую границу.
+`iloc` выбирает по позициям, как в NumPy: `df.iloc[0]`, `df.iloc[:5, 1:3]`. Правая граница среза в `iloc` не включается.
+Фильтр — это булева маска: `df[df["city"] == "Алматы"]`. Условия объединяют через `&` и `|` со скобками, для списка значений есть `isin`. Сортируют через `sort_values`, по убыванию — `ascending=False`.
+```code
+import pandas as pd
+
+df = pd.DataFrame({
+    "name": ["Ада", "Алан", "Грейс", "Линус", "Маргарет"],
+    "age": [36, 41, 29, 33, 25],
+    "lang": ["py", "java", "py", "c", "py"],
+})
+print(df.loc[1, "name"])                         # Алан
+print(df.iloc[-1]["name"])                       # Маргарет
+young_py = df[(df["age"] < 35) & (df["lang"] == "py")]
+print(young_py["name"].tolist())                 # ['Грейс', 'Маргарет']
+print(df[df["lang"].isin(["java", "c"])].shape)  # (2, 3)
+print(df.sort_values("age", ascending=False)["name"].iloc[0])   # Алан
+print(df.loc[0:2, "age"].tolist())               # [36, 41, 29] — граница включена
+```
+! В `loc` срез включает правую границу, в `iloc` — нет
+! Изменяйте значения через `df.loc[mask, "col"] = value`, а не цепочкой `df[mask]["col"] = value`
+! `isin` удобнее длинной цепочки условий через `|`
+? out Что выведет код?
+```code
+import pandas as pd
+df = pd.DataFrame({"x": [10, 20, 30, 40]})
+print(df.loc[1:2, "x"].tolist(), df.iloc[1:2]["x"].tolist())
+```
+> [20, 30] [20]
+= loc включает правую границу, iloc — нет.
+? out Что выведет код?
+```code
+import pandas as pd
+df = pd.DataFrame({"a": [5, 1, 8, 3]})
+print(len(df[(df["a"] > 2) & (df["a"] < 8)]))
+```
+> 2
+= Подходят 5 и 3.
+? mc Как правильно поставить 0 в столбце `price` для строк, где `qty == 0`?
+- `df[df["qty"] == 0]["price"] = 0`
++ `df.loc[df["qty"] == 0, "price"] = 0`
+- `df.price[qty == 0] = 0`
+- `df.where(qty == 0).price = 0`
+= Изменение через loc с маской и именем столбца меняет исходную таблицу; цепочка индексаций изменяет копию.
+? out Что выведет код?
+```code
+import pandas as pd
+df = pd.DataFrame({"n": ["b", "c", "a"], "v": [2, 3, 1]})
+print(df.sort_values("v")["n"].tolist())
+```
+> ['a', 'b', 'c']
+= Сортировка по v: 1, 2, 3.
+
+@lesson Очистка данных
+Реальные данные грязные: пропуски, дубли, числа в виде строк, лишние пробелы. Пропуски находят через `isna().sum()`, удаляют — `dropna()`, заполняют — `fillna()`: медианой, средним или отдельным значением.
+Дубли удаляет `drop_duplicates()`. Тип меняют через `astype`, а строки с мусором превращают в числа через `pd.to_numeric(..., errors="coerce")` — неподходящие значения станут NaN.
+Текстовые столбцы чистят методами `.str`: `strip`, `lower`, `replace`, `contains`. Столбцы переименовывают через `rename(columns={...})`.
+```code
+import pandas as pd
+import numpy as np
+
+df = pd.DataFrame({
+    "city": [" Алматы", "алматы", "Астана", None, "Астана"],
+    "price": ["100", "200", "abc", "150", "200"],
+})
+df["city"] = df["city"].str.strip().str.capitalize()
+df["price"] = pd.to_numeric(df["price"], errors="coerce")
+print(df["price"].isna().sum())               # 1 — "abc" стал NaN
+df["price"] = df["price"].fillna(df["price"].median())
+df = df.dropna(subset=["city"]).drop_duplicates()
+print(df["city"].value_counts().to_dict())    # {'Алматы': 2, 'Астана': 2}
+print(df["price"].tolist())                   # [100.0, 200.0, 175.0, 200.0]
+```
+! Сначала посчитайте пропуски `df.isna().sum()`, потом решайте, что с ними делать
+! Медиана для заполнения устойчивее среднего к выбросам
+! `errors="coerce"` превращает непарсящиеся значения в NaN, а не падает
+? out Что выведет код?
+```code
+import pandas as pd
+import numpy as np
+s = pd.Series([1, np.nan, 3, np.nan])
+print(s.isna().sum(), s.fillna(0).sum())
+```
+> 2 4.0
+= Два пропуска; после замены на 0 сумма 1 + 3 = 4.0.
+? out Что выведет код?
+```code
+import pandas as pd
+s = pd.to_numeric(pd.Series(["5", "x", "7"]), errors="coerce")
+print(s.sum())
+```
+> 12.0
+= "x" стал NaN, сумма пропускает NaN: 5 + 7 = 12.0.
+? out Что выведет код?
+```code
+import pandas as pd
+df = pd.DataFrame({"a": [1, 1, 2], "b": ["x", "x", "y"]})
+print(len(df.drop_duplicates()))
+```
+> 2
+= Первые две строки одинаковые, одна удаляется.
+? fill Впишите метод строк, который убирает пробелы по краям.
+```code
+df["name"] = df["name"].str.___()
+```
+> strip
+= .str.strip() применяется к каждой строке столбца.
+? mc Чем опасно сразу удалить все строки с пропусками?
+- Ничем, это лучший способ
++ Можно потерять большую часть данных и исказить выборку, если пропуски не случайны
+- dropna работает только на числах
+- pandas не умеет удалять строки
+= Перед удалением смотрят, сколько пропусков и почему они возникли; часто лучше заполнить.
+
+@lesson Группировка и сводные таблицы
+`groupby` разбивает таблицу на группы по значению столбца, применяет функцию к каждой и собирает результат: `df.groupby("city")["salary"].mean()`. Несколько функций сразу — через `agg`: `agg(["mean", "max"])` или именованно `agg(avg=("salary", "mean"))`.
+`value_counts()` считает, сколько раз встречается каждое значение. `pivot_table` строит сводную таблицу: строки, столбцы, значения и функция агрегации — как в Excel.
+`transform` возвращает результат той же длины, что и таблица: так добавляют, например, среднюю зарплату по городу в каждую строку.
+```code
+import pandas as pd
+
+df = pd.DataFrame({
+    "city": ["Алматы", "Астана", "Алматы", "Астана", "Алматы"],
+    "level": ["junior", "junior", "senior", "senior", "junior"],
+    "salary": [600, 650, 1800, 2000, 700],
+})
+print(df.groupby("city")["salary"].mean().to_dict())
+# {'Алматы': 1033.3333333333333, 'Астана': 1325.0}
+
+stats = df.groupby("level").agg(avg=("salary", "mean"), n=("salary", "size"))
+print(stats.loc["junior", "n"], stats.loc["senior", "avg"])   # 3 1900.0
+
+print(df["city"].value_counts().iloc[0])     # 3
+
+pt = df.pivot_table(index="city", columns="level", values="salary", aggfunc="mean")
+print(pt.loc["Астана", "senior"])            # 2000.0
+
+df["city_avg"] = df.groupby("city")["salary"].transform("mean")
+print(len(df["city_avg"]))                   # 5
+```
+! После `groupby` укажите столбец и функцию: `df.groupby("a")["b"].sum()`
+! `size` считает строки в группе, `count` — непустые значения
+! `transform` нужен, когда результат надо вернуть в исходную таблицу
+? out Что выведет код?
+```code
+import pandas as pd
+df = pd.DataFrame({"g": ["a", "b", "a"], "v": [1, 2, 3]})
+print(df.groupby("g")["v"].sum().to_dict())
+```
+> {'a': 4, 'b': 2}
+= Группа a: 1 + 3 = 4, группа b: 2.
+? out Что выведет код?
+```code
+import pandas as pd
+s = pd.Series(["py", "js", "py", "py", "go"])
+print(s.value_counts()["py"])
+```
+> 3
+= py встречается три раза.
+? mc Что вернёт `df.groupby("city")["price"].transform("mean")`?
+- Одну строку на каждый город
++ Series той же длины, что и df: в каждой строке — среднее по её городу
+- Одно число
+- Отсортированную таблицу
+= transform возвращает значения, выровненные по исходным строкам.
+? fill Впишите метод для нескольких агрегатов сразу.
+```code
+df.groupby("city")["price"].___(["mean", "max"])
+```
+> agg
+> aggregate
+= agg применяет список функций к каждой группе.
+
+@lesson Объединение таблиц
+`pd.merge` соединяет таблицы по ключу, как JOIN в SQL. Параметр `how`: `inner` — только совпадающие ключи, `left` — все строки левой таблицы, `right`, `outer` — все строки обеих. Если ключи называются по-разному — `left_on` и `right_on`.
+`pd.concat` склеивает таблицы одинаковой структуры друг под другом (`axis=0`) или рядом (`axis=1`). Для склейки по строкам часто нужен `ignore_index=True`.
+После `left`-соединения строки без пары получают NaN — это удобный способ найти, например, клиентов без заказов.
+```code
+import pandas as pd
+
+users = pd.DataFrame({"id": [1, 2, 3], "name": ["Ада", "Алан", "Грейс"]})
+orders = pd.DataFrame({"user_id": [1, 1, 3], "total": [500, 300, 900]})
+
+m = users.merge(orders, left_on="id", right_on="user_id", how="left")
+print(len(m))                                   # 4
+no_orders = m[m["total"].isna()]["name"].tolist()
+print(no_orders)                                # ['Алан']
+
+inner = users.merge(orders, left_on="id", right_on="user_id")
+print(inner.groupby("name")["total"].sum().to_dict())   # {'Ада': 800, 'Грейс': 900}
+
+jan = pd.DataFrame({"m": ["jan"], "sales": [10]})
+feb = pd.DataFrame({"m": ["feb"], "sales": [12]})
+print(pd.concat([jan, feb], ignore_index=True).shape)   # (2, 2)
+```
+! `how="inner"` по умолчанию: строки без пары исчезают
+! После merge проверяйте число строк: дубли ключей размножают строки
+! `concat` — склеить, `merge` — соединить по ключу
+? out Что выведет код?
+```code
+import pandas as pd
+a = pd.DataFrame({"k": [1, 2, 3]})
+b = pd.DataFrame({"k": [2, 3, 4]})
+print(len(a.merge(b, on="k")), len(a.merge(b, on="k", how="outer")))
+```
+> 2 4
+= Общие ключи 2 и 3; во внешнем соединении — все ключи 1, 2, 3, 4.
+? out Что выведет код?
+```code
+import pandas as pd
+a = pd.DataFrame({"k": [1, 2]})
+b = pd.DataFrame({"k": [1, 1, 1]})
+print(len(a.merge(b, on="k")))
+```
+> 3
+= Ключ 1 из a совпадает с тремя строками b — строка размножается.
+? mc Как найти пользователей без заказов?
+- `users.merge(orders, how="inner")` и взять пустые строки
++ `users.merge(orders, how="left")` и взять строки, где столбцы заказа пустые
+- `pd.concat([users, orders])`
+- `orders.drop_duplicates()`
+= Левое соединение сохраняет всех пользователей, а у тех, кто без заказов, поля заказа будут NaN.
+? fill Впишите функцию, которая склеивает таблицы друг под другом.
+```code
+all_months = pd.___([jan, feb], ignore_index=True)
+```
+> concat
+= pd.concat склеивает список таблиц по оси 0.
+
+@lesson Даты, apply и подготовка признаков
+Даты превращают из строк в тип datetime через `pd.to_datetime`, после чего доступны `.dt.year`, `.dt.month`, `.dt.dayofweek` и разница дат в днях. Таблицу с датами в индексе можно агрегировать по периодам через `resample("ME")` (по месяцам).
+`apply` применяет функцию к каждому значению или строке, но это медленный цикл: если есть векторизованный способ (`np.where`, арифметика, методы `.str` и `.dt`), используйте его.
+Категориальные признаки для моделей превращают в числа: `pd.get_dummies` создаёт по столбцу на каждое значение (one-hot). Это последний шаг перед передачей таблицы в scikit-learn.
+```code
+import pandas as pd
+import numpy as np
+
+df = pd.DataFrame({
+    "date": ["2026-01-15", "2026-01-20", "2026-02-03"],
+    "amount": [120, 80, 200],
+    "channel": ["web", "app", "web"],
+})
+df["date"] = pd.to_datetime(df["date"])
+df["month"] = df["date"].dt.month
+print(df["month"].tolist())                          # [1, 1, 2]
+print((df["date"].max() - df["date"].min()).days)    # 19
+
+df["big"] = np.where(df["amount"] >= 100, 1, 0)      # векторизованно вместо apply
+print(df["big"].tolist())                            # [1, 0, 1]
+
+monthly = df.set_index("date")["amount"].resample("ME").sum()
+print(monthly.tolist())                              # [200, 200]
+
+X = pd.get_dummies(df[["amount", "channel"]], columns=["channel"], dtype=int)
+print(list(X.columns))       # ['amount', 'channel_app', 'channel_web']
+```
+! Даты сразу переводите в datetime — сравнение строк дат даёт ошибки
+! `np.where(условие, a, b)` быстрее `apply` с if внутри
+! `get_dummies` — быстрый one-hot; в проде лучше OneHotEncoder из scikit-learn
+? out Что выведет код?
+```code
+import pandas as pd
+d = pd.to_datetime(pd.Series(["2026-03-01", "2026-03-11"]))
+print((d[1] - d[0]).days, d.dt.month.tolist())
+```
+> 10 [3, 3]
+= Между 1 и 11 марта 10 дней, оба в третьем месяце.
+? out Что выведет код?
+```code
+import pandas as pd
+df = pd.DataFrame({"c": ["red", "blue", "red"]})
+print(pd.get_dummies(df, columns=["c"], dtype=int).shape)
+```
+> (3, 2)
+= Два уникальных значения — два столбца c_blue и c_red.
+? mc Почему `apply` с обычной функцией стоит заменять векторизованными операциями?
++ apply вызывает функцию Python для каждой строки, это медленно на больших таблицах
+- apply не работает с числами
+- apply меняет порядок строк
+- apply удаляет пропуски
+= Векторизованные операции работают в C над всем столбцом сразу.
+? fill Впишите функцию, которая превращает строки в даты.
+```code
+df["date"] = pd.___(df["date"])
+```
+> to_datetime
+= pd.to_datetime распознаёт строки дат и даёт тип datetime64.
+
+@exam
+? out Что выведет код?
+```code
+import pandas as pd
+df = pd.DataFrame({"x": [3, 1, 2]}, index=["a", "b", "c"])
+print(df.loc["b", "x"], df.iloc[0, 0])
+```
+> 1 3
+= loc — по метке b, iloc — по позиции 0.
+? out Что выведет код?
+```code
+import pandas as pd
+df = pd.DataFrame({"t": ["a", "b", "a", "a"], "v": [1, 2, 3, 4]})
+print(df.groupby("t")["v"].mean().to_dict())
+```
+> {'a': 2.6666666666666665, 'b': 2.0}
+= Среднее для a: (1 + 3 + 4) / 3, для b: 2.
+? mc Что вернёт `df.isna().sum()`?
+- Общее число строк
++ Число пропусков в каждом столбце
+- Таблицу без пропусков
+- Число столбцов с пропусками
+= isna даёт таблицу True/False, sum по столбцам считает True.
+? out Что выведет код?
+```code
+import pandas as pd
+a = pd.DataFrame({"id": [1, 2], "x": [10, 20]})
+b = pd.DataFrame({"id": [2, 3], "y": [5, 6]})
+print(a.merge(b, on="id", how="left")["y"].isna().sum())
+```
+> 1
+= У id=1 нет пары в b, поэтому y = NaN.
+? out Что выведет код?
+```code
+import pandas as pd
+s = pd.Series([4, 8, 15, 16, 23, 42])
+print(s[s > 10].count())
+```
+> 4
+= Больше 10: 15, 16, 23, 42.
+? mc Какой метод нужен, чтобы добавить в каждую строку среднее по её группе?
+- agg
+- pivot_table
++ transform
+- concat
+= transform возвращает Series той же длины, что и исходная таблица.
+? out Что выведет код?
+```code
+import pandas as pd
+df = pd.DataFrame({"a": [1, 2]})
+df["b"] = df["a"] * 10
+print(df.sum().to_dict())
+```
+> {'a': 3, 'b': 30}
+= Сумма каждого столбца.
+? mc Чем `concat` отличается от `merge`?
++ concat склеивает таблицы по оси, merge соединяет строки по значениям ключа
+- concat работает только со строками
+- merge не умеет outer
+- Ничем
+= merge — аналог JOIN, concat — аналог UNION / склейки столбцов.
+? out Что выведет код?
+```code
+import pandas as pd
+s = pd.Series(["  Py", "py ", "JS"]).str.strip().str.lower()
+print(s.nunique())
+```
+> 2
+= После очистки остаются py, py, js — два уникальных.
+? fill Впишите параметр, чтобы сортировка шла по убыванию.
+```code
+df.sort_values("score", ___=False)
+```
+> ascending
+= ascending=False сортирует от большего к меньшему.
+? out Что выведет код?
+```code
+import pandas as pd
+df = pd.DataFrame({"d": pd.to_datetime(["2026-05-01", "2026-12-31"])})
+print(df["d"].dt.month.sum())
+```
+> 17
+= Май (5) + декабрь (12) = 17.
+? mc Вы сделали merge, и строк стало больше, чем было в обеих таблицах. Вероятная причина?
+- Ошибка pandas
++ В ключе есть повторяющиеся значения, и каждая пара совпадений дала отдельную строку
+- Пропуски в данных
+- Неверный тип индекса
+= При дублях ключей соединение «многие ко многим» размножает строки — проверяйте уникальность ключей.

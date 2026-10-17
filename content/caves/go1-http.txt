@@ -1,0 +1,446 @@
+@lang id=gohttp name=HTTP-сервисы на Go land=Пещера HTTP color=#00add8 cave=go track=goback step=1
+@about Веб-сервисы на Go: net/http, роутинг, JSON, middleware, контекст и корректная остановка сервера.
+@why Первая, потому что Go чаще всего выбирают именно для бэкенда и микросервисов, а стандартная библиотека net/http уже содержит почти всё. База данных и gRPC добавляются к этому серверу.
+
+@lesson net/http и маршруты
+Сервер на Go пишется стандартной библиотекой: `http.NewServeMux()` регистрирует обработчики, `http.ListenAndServe(":8080", mux)` запускает сервер. С Go 1.22 шаблоны умеют метод и параметры пути: `mux.HandleFunc("GET /api/books/{id}", h)`, а значение берут через `r.PathValue("id")`.
+Обработчик — функция `func(w http.ResponseWriter, r *http.Request)`. Статус задаёт `w.WriteHeader(code)`, заголовки — `w.Header().Set(...)` до записи тела.
+Каждый запрос Go обрабатывает в своей горутине, поэтому общие данные защищают мьютексом.
+```code
+package main
+
+import (
+	"encoding/json"
+	"log"
+	"net/http"
+	"strconv"
+	"sync"
+)
+
+type Book struct {
+	ID    int    `json:"id"`
+	Title string `json:"title"`
+}
+
+type Store struct {
+	mu    sync.RWMutex
+	books map[int]Book
+}
+
+func (s *Store) get(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil {
+		http.Error(w, "id должен быть числом", http.StatusBadRequest)
+		return
+	}
+	s.mu.RLock()
+	b, ok := s.books[id]
+	s.mu.RUnlock()
+	if !ok {
+		http.Error(w, "не найдено", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(b)
+}
+
+func main() {
+	s := &Store{books: map[int]Book{1: {1, "The Go Programming Language"}}}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/books/{id}", s.get)
+	log.Println("http://localhost:8080")
+	log.Fatal(http.ListenAndServe(":8080", mux))
+}
+```
+! С Go 1.22 метод и параметры пути есть прямо в `ServeMux`
+! Заголовки и статус — до записи тела ответа
+! Обработчики работают параллельно — защищайте общие данные
+? mc Как получить `42` из запроса к шаблону `GET /api/books/{id}`?
++ r.PathValue("id")
+- r.URL.Query().Get("id")
+- r.FormValue("book")
+- r.Header.Get("id")
+= PathValue читает параметр пути.
+? out Что выведет код?
+```code
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+)
+
+type Book struct {
+	ID    int    `json:"id"`
+	Title string `json:"title"`
+}
+
+func main() {
+	b, _ := json.Marshal(Book{1, "Go"})
+	fmt.Println(string(b))
+}
+```
+> {"id":1,"title":"Go"}
+= Теги json задают имена полей в JSON.
+? mc Почему нужен мьютекс для map со всеми книгами в сервере?
++ Запросы обрабатываются параллельно в разных горутинах, а map в Go не потокобезопасна
+- Чтобы ускорить JSON
+- Мьютекс не нужен
+- Так требует ServeMux
+= Конкурентная запись в map приводит к панике.
+? fill Впишите функцию стандартной библиотеки для ответа с ошибкой.
+```code
+http.___(w, "не найдено", http.StatusNotFound)
+```
+> Error
+= http.Error пишет текст и статус.
+
+@lesson JSON: запросы и ответы
+Тело запроса читают декодером: `json.NewDecoder(r.Body).Decode(&req)`. `DisallowUnknownFields()` вернёт ошибку на лишние поля, `http.MaxBytesReader` ограничит размер тела.
+Структурные теги управляют JSON: `json:"name"`, `json:"note,omitempty"` (не выводить пустое), `json:"-"` (никогда не выводить, например хеш пароля).
+Удобно завести вспомогательную функцию `writeJSON(w, status, v)` — единый формат ответов и ошибок.
+```code
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+)
+
+type CreateUser struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
+type User struct {
+	ID           int    `json:"id"`
+	Email        string `json:"email"`
+	PasswordHash string `json:"-"`
+	Bio          string `json:"bio,omitempty"`
+}
+
+func main() {
+	dec := json.NewDecoder(strings.NewReader(`{"email":"ada@mail.kz","password":"secret123","admin":true}`))
+	dec.DisallowUnknownFields()
+	var req CreateUser
+	err := dec.Decode(&req)
+	fmt.Println(err != nil)                 // true — поле admin лишнее
+
+	out, _ := json.Marshal(User{ID: 1, Email: "ada@mail.kz", PasswordHash: "x"})
+	fmt.Println(string(out))                // {"id":1,"email":"ada@mail.kz"}
+}
+```
+! `json:"-"` — для полей, которые нельзя отдавать наружу
+! Ограничивайте размер тела запроса
+! Проверяйте ошибку `Decode` — тело может быть пустым или битым
+? out Что выведет код?
+```code
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+)
+
+type P struct {
+	Name string `json:"name"`
+	Note string `json:"note,omitempty"`
+	Hash string `json:"-"`
+}
+
+func main() {
+	b, _ := json.Marshal(P{Name: "A", Hash: "h"})
+	fmt.Println(string(b))
+}
+```
+> {"name":"A"}
+= Пустой note пропущен из-за omitempty, Hash скрыт тегом "-".
+? mc Что делает `DisallowUnknownFields()`?
++ Возвращает ошибку, если в JSON есть поля, которых нет в структуре
+- Удаляет пустые поля
+- Ускоряет разбор
+- Разрешает любые поля
+= Защита от опечаток и подложенных полей.
+? fill Впишите тег, чтобы поле не попадало в JSON.
+```code
+PasswordHash string `json:"___"`
+```
+> -
+= json:"-" полностью исключает поле.
+? out Что выведет код?
+```code
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+)
+
+func main() {
+	var m map[string]int
+	err := json.Unmarshal([]byte(`{"a":1,"b":2}`), &m)
+	fmt.Println(err == nil, m["a"]+m["b"])
+}
+```
+> true 3
+= JSON разобран в map.
+
+@lesson Middleware и context
+Middleware в Go — функция, которая принимает `http.Handler` и возвращает новый: `func logging(next http.Handler) http.Handler`. Так добавляют логирование, восстановление после паники, проверку токена, CORS.
+`r.Context()` — контекст запроса: он отменяется, когда клиент разорвал соединение или истёк таймаут. Его передают дальше во все функции, которые ходят в базу или сеть, — первым аргументом `ctx context.Context`.
+Значения в контексте (например, id пользователя после проверки токена) кладут через `context.WithValue` с собственным типом ключа.
+```code
+package main
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"time"
+)
+
+type ctxKey string
+
+func auth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer secret" {
+			http.Error(w, "нужен вход", http.StatusUnauthorized)
+			return
+		}
+		ctx := context.WithValue(r.Context(), ctxKey("user"), "ada")
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+func me(w http.ResponseWriter, r *http.Request) {
+	fmt.Fprintf(w, "привет, %s", r.Context().Value(ctxKey("user")))
+}
+
+func main() {
+	h := auth(http.HandlerFunc(me))
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/me", nil))
+	fmt.Println(rec.Code)                              // 401
+
+	req := httptest.NewRequest("GET", "/me", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	fmt.Println(rec.Code, rec.Body.String())           // 200 привет, ada
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	<-ctx.Done()
+	fmt.Println(ctx.Err())                             // context deadline exceeded
+}
+```
+! Middleware оборачивает `http.Handler` и вызывает `next.ServeHTTP`
+! `ctx` — первым аргументом во всех функциях с вводом-выводом
+! Ключи контекста — собственного типа, не строки
+? mc Когда отменяется `r.Context()`?
++ Когда клиент разорвал соединение, истёк таймаут или запрос завершён
+- Никогда
+- Через час
+- При перезапуске Go
+= Отмена контекста останавливает лишнюю работу.
+? out Что выведет код?
+```code
+package main
+
+import "fmt"
+
+type Handler func(string) string
+
+func upper(next Handler) Handler {
+	return func(s string) string { return "[" + next(s) + "]" }
+}
+
+func main() {
+	h := upper(upper(func(s string) string { return s }))
+	fmt.Println(h("go"))
+}
+```
+> [[go]]
+= Два слоя middleware оборачивают обработчик.
+? fill Впишите функцию, создающую контекст с ограничением по времени.
+```code
+ctx, cancel := context.___(parent, 2*time.Second)
+```
+> WithTimeout
+= WithTimeout отменит контекст по истечении времени.
+? mc Почему ключ контекста — собственный тип, а не строка?
++ Чтобы ключи разных пакетов не столкнулись случайно
+- Строки запрещены
+- Так быстрее
+- Это требование JSON
+= Свой тип делает ключ уникальным для пакета.
+
+@lesson Конфигурация, логи и плавная остановка
+Настройки берут из переменных окружения (`os.Getenv`) с разумными значениями по умолчанию. Логи — структурированные через `log/slog`: `slog.Info("заказ создан", "id", id, "sum", sum)` — их легко искать.
+Сервер настраивают явно: `http.Server{Addr, Handler, ReadTimeout, WriteTimeout}` — без таймаутов медленные клиенты держат соединения вечно.
+Плавная остановка: ловим сигнал `SIGTERM` (Kubernetes, Docker), вызываем `srv.Shutdown(ctx)` — сервер перестаёт принимать новые запросы и дожидается текущих.
+```code
+package main
+
+import (
+	"context"
+	"errors"
+	"log/slog"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+)
+
+func env(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}
+
+func main() {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) })
+
+	srv := &http.Server{Addr: ":" + env("PORT", "8080"), Handler: mux,
+		ReadTimeout: 5 * time.Second, WriteTimeout: 10 * time.Second}
+
+	go func() {
+		slog.Info("сервер запущен", "addr", srv.Addr)
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("сервер упал", "err", err)
+			os.Exit(1)
+		}
+	}()
+
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
+	<-stop
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	srv.Shutdown(ctx)
+	slog.Info("сервер остановлен")
+}
+```
+! Всегда задавайте таймауты у `http.Server`
+! `Shutdown` дожидается текущих запросов — пользователи не получат обрыв
+! Структурированные логи `slog` вместо `fmt.Println`
+? mc Что делает `srv.Shutdown(ctx)`?
++ Перестаёт принимать новые соединения и ждёт завершения текущих запросов
+- Мгновенно убивает процесс
+- Перезапускает сервер
+- Удаляет логи
+= Плавная остановка при деплое.
+? out Что выведет код?
+```code
+package main
+
+import (
+	"fmt"
+	"os"
+)
+
+func env(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}
+
+func main() { fmt.Println(env("SURELY_UNSET_PORT_VAR", "8080")) }
+```
+> 8080
+= Переменная не задана — используется значение по умолчанию.
+? fill Впишите пакет стандартной библиотеки для структурированных логов.
+```code
+import "log/___"
+```
+> slog
+= log/slog появился в Go 1.21.
+? mc Почему опасен http.Server без ReadTimeout?
++ Медленные или злонамеренные клиенты могут держать соединения бесконечно и исчерпать ресурсы
+- Он не запустится
+- Он медленнее отвечает
+- Ничем
+= Таймауты защищают от атак медленными запросами.
+
+@exam
+? mc Сколько горутин обрабатывает запросы в net/http?
++ Каждый запрос — в своей горутине
+- Одна на весь сервер
+- По одной на ядро
+- Нисколько
+= Поэтому общие данные нужно защищать.
+? out Что выведет код?
+```code
+package main
+
+import (
+	"fmt"
+	"strconv"
+)
+
+func main() {
+	_, err := strconv.Atoi("abc")
+	n, _ := strconv.Atoi("42")
+	fmt.Println(err != nil, n+1)
+}
+```
+> true 43
+= Нечисловая строка даёт ошибку, "42" превращается в 42.
+? fill Впишите метод ResponseWriter для установки статуса.
+```code
+w.___(http.StatusCreated)
+```
+> WriteHeader
+= WriteHeader вызывают до записи тела.
+? mc Какой статус отдать, если в теле запроса битый JSON?
++ 400 Bad Request
+- 500
+- 404
+- 200
+= Ошибка клиента.
+? mc Зачем передавать ctx в функции работы с базой?
++ Чтобы запрос к базе отменился, если клиент ушёл или истёк таймаут
+- Для логирования
+- Чтобы передать пароль
+- Это необязательно и бесполезно
+= Отмена экономит ресурсы базы и сервера.
+? out Что выведет код?
+```code
+package main
+
+import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+)
+
+func main() {
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTeapot)
+	})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/", nil))
+	fmt.Println(rec.Code)
+}
+```
+> 418
+= httptest записывает ответ обработчика без настоящей сети.
+? mc Как Kubernetes просит контейнер остановиться?
++ Отправляет сигнал SIGTERM, затем через время SIGKILL
+- Удаляет файлы
+- Отключает сеть
+- Перезагружает узел
+= Обработка SIGTERM даёт плавную остановку.
+? fill Впишите тип, который принимает и возвращает middleware в net/http.
+```code
+func logging(next http.Handler) http.___
+```
+> Handler
+= Middleware оборачивает один Handler в другой.

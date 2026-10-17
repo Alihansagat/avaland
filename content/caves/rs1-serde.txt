@@ -1,0 +1,343 @@
+@lang id=serde name=Cargo и Serde land=Пещера Serde color=#b7410e cave=rs track=rustback step=1
+@about Экосистема Rust: Cargo и крейты, обработка ошибок в приложениях, сериализация JSON через Serde.
+@why Первая, потому что любой Rust-сервис начинается с Cargo.toml и почти всегда работает с JSON. Асинхронность Tokio и веб-фреймворк Axum используют Serde для данных запросов и ответов.
+
+@lesson Cargo и крейты
+Cargo — менеджер пакетов и система сборки Rust. `cargo new shop` создаёт проект, зависимости (крейты с crates.io) пишут в `Cargo.toml` или добавляют командой `cargo add serde --features derive`. Точные версии фиксирует `Cargo.lock`.
+Команды на каждый день: `cargo build` (`--release` — с оптимизациями), `cargo run`, `cargo test`, `cargo check` (быстрая проверка без сборки), `cargo clippy` (линтер), `cargo fmt` (форматирование).
+Фичи (features) включают части крейта по необходимости: так Tokio не тянет всё подряд, а только нужные модули. Рабочее пространство (workspace) объединяет несколько крейтов одного проекта.
+```code
+# Cargo.toml
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+thiserror = "2"
+
+[dev-dependencies]
+pretty_assertions = "1"
+
+# терминал:
+# cargo add tokio --features full
+# cargo clippy -- -D warnings
+# cargo build --release        → target/release/shop
+```
+! `cargo check` — самый быстрый способ увидеть ошибки компиляции
+! `cargo clippy` подсказывает идиоматичный код — включайте в CI
+! Включайте у крейтов только нужные features
+? mc Что делает `cargo check`?
++ Проверяет код на ошибки без создания исполняемого файла — быстрее сборки
+- Запускает тесты
+- Публикует крейт
+- Обновляет Rust
+= Удобно во время разработки.
+? mc Зачем файл Cargo.lock?
++ Фиксирует точные версии всех зависимостей для воспроизводимой сборки
+- Хранит пароли
+- Блокирует сборку
+- Содержит документацию
+= Для приложений Cargo.lock коммитят в репозиторий.
+? fill Впишите команду, собирающую оптимизированную версию.
+```code
+cargo build --___
+```
+> release
+= Профиль release включает оптимизации.
+? out Что выведет код?
+```code
+fn main() {
+    let deps = ["serde", "tokio", "serde", "axum"];
+    let mut uniq: Vec<&str> = deps.to_vec();
+    uniq.sort();
+    uniq.dedup();
+    println!("{} {:?}", uniq.len(), uniq);
+}
+```
+> 3 ["axum", "serde", "tokio"]
+= После сортировки и dedup остаются три уникальных крейта.
+
+@lesson Ошибки: anyhow и thiserror
+В Rust ошибки — значения типа `Result<T, E>`, а оператор `?` пробрасывает их вверх. Для библиотек и слоёв с понятными ошибками заводят своё перечисление с `thiserror`: `#[derive(Error)]` и сообщение в `#[error("...")]`.
+В приложении (main, CLI, обработчики верхнего уровня) удобен `anyhow::Result`: любая ошибка превращается в `anyhow::Error`, а `.context("что делали")` добавляет понятное описание.
+`unwrap()` и `expect()` паникуют при ошибке — допустимы в тестах и прототипах, но не в коде сервиса.
+```code
+use std::fmt;
+use std::num::ParseIntError;
+
+#[derive(Debug)]
+enum OrderError {
+    BadQty(ParseIntError),
+    OutOfStock { left: u32 },
+}
+
+impl fmt::Display for OrderError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            OrderError::BadQty(e) => write!(f, "неверное количество: {e}"),
+            OrderError::OutOfStock { left } => write!(f, "на складе осталось {left}"),
+        }
+    }
+}
+
+impl From<ParseIntError> for OrderError {
+    fn from(e: ParseIntError) -> Self { OrderError::BadQty(e) }
+}
+
+fn reserve(input: &str, stock: u32) -> Result<u32, OrderError> {
+    let qty: u32 = input.trim().parse()?;          // ? превращает ParseIntError в OrderError
+    if qty > stock {
+        return Err(OrderError::OutOfStock { left: stock });
+    }
+    Ok(stock - qty)
+}
+
+fn main() {
+    println!("{:?}", reserve("3", 10).ok());       // Some(7)
+    for input in ["abc", "20"] {
+        if let Err(e) = reserve(input, 10) {
+            println!("{e}");
+        }
+    }
+}
+// с thiserror то же короче: #[derive(Debug, thiserror::Error)] enum OrderError { #[error("...")] ... #[from] ... }
+```
+! Свои ошибки — перечислением (thiserror), в main — anyhow с context
+! `?` вызывает `From` и превращает одну ошибку в другую
+! Никаких `unwrap()` в коде сервиса
+? out Что выведет код?
+```code
+fn parse(s: &str) -> Result<i32, std::num::ParseIntError> {
+    let n: i32 = s.parse()?;
+    Ok(n * 2)
+}
+
+fn main() {
+    println!("{:?} {}", parse("21"), parse("x").is_err());
+}
+```
+> Ok(42) true
+= ? вернул ошибку разбора для "x", а "21" удвоено.
+? mc Когда уместен `anyhow::Result`?
++ В коде приложения верхнего уровня, где ошибку нужно описать и показать, а не разбирать по типам
+- В публичном API библиотеки
+- Вместо Option
+- Никогда
+= В библиотеках вызывающий код хочет различать ошибки — там thiserror.
+? fill Впишите оператор, который пробрасывает ошибку вверх.
+```code
+let cfg = read_config()___;
+```
+> ?
+= ? возвращает Err из функции или распаковывает Ok.
+? mc Чем опасен `unwrap()` в обработчике HTTP-запроса?
++ При ошибке поток запаникует, а клиент получит обрыв вместо понятного ответа
+- Он медленный
+- Он не компилируется
+- Ничем
+= Ошибки нужно обрабатывать и превращать в ответы.
+
+@lesson Serde: JSON и структуры
+Serde превращает структуры Rust в JSON и обратно: `#[derive(Serialize, Deserialize)]`, затем `serde_json::to_string(&x)` и `serde_json::from_str::<T>(s)`.
+Атрибуты управляют форматом: `#[serde(rename_all = "camelCase")]` — стиль имён, `#[serde(default)]` — значение по умолчанию для отсутствующего поля, `#[serde(skip_serializing_if = "Option::is_none")]` — не выводить пустое, `#[serde(rename = "type")]` — для зарезервированных слов.
+Неизвестную структуру разбирают в `serde_json::Value` и обращаются по ключам — удобно для внешних API, но типизированные структуры надёжнее.
+```code
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Order {
+    order_id: u64,
+    customer_email: String,
+    #[serde(default)]
+    items: Vec<Item>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    promo_code: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct Item { sku: String, qty: u32, price: u64 }
+
+fn main() -> serde_json::Result<()> {
+    let raw = r#"{"orderId": 7, "customerEmail": "ada@mail.kz", "items": [{"sku": "A1", "qty": 2, "price": 1500}]}"#;
+    let order: Order = serde_json::from_str(raw)?;
+    let total: u64 = order.items.iter().map(|i| i.qty as u64 * i.price).sum();
+    println!("{} {}", order.order_id, total);                // 7 3000
+    println!("{}", serde_json::to_string(&order)?);           // promoCode не выводится
+    let v: serde_json::Value = serde_json::from_str(raw)?;
+    println!("{}", v["items"][0]["sku"]);                     // "A1"
+    Ok(())
+}
+```
+! `rename_all = "camelCase"` — когда API в стиле JavaScript
+! `Option<T>` — для необязательных полей
+! Ошибка разбора JSON — это `Result`, обрабатывайте её
+? mc Что делает `#[serde(default)]` у поля?
++ Если поля нет в JSON, берётся значение по умолчанию (например, пустой Vec)
+- Делает поле обязательным
+- Пропускает поле при сериализации
+- Задаёт тип по умолчанию
+= Удобно для необязательных списков и флагов.
+? mc Как в Rust описать поле JSON, которого может не быть?
++ Option<T>
+- Пустой строкой
+- Через unsafe
+- Через Box<T>
+= None соответствует отсутствующему или null значению.
+? fill Впишите атрибут derive для разбора JSON в структуру.
+```code
+#[derive(___)]
+struct Config { port: u16 }
+```
+> Deserialize
+= Deserialize — из JSON в структуру, Serialize — обратно.
+? out Что выведет код?
+```code
+struct Item { qty: u32, price: u64 }
+
+fn main() {
+    let items = vec![Item { qty: 2, price: 1500 }, Item { qty: 1, price: 999 }];
+    let total: u64 = items.iter().map(|i| i.qty as u64 * i.price).sum();
+    println!("{total}");
+}
+```
+> 3999
+= 2 × 1500 + 999.
+
+@lesson Конфигурация, логи и тесты
+Конфигурацию собирают из переменных окружения в структуру при старте (крейты `envy`, `config` или вручную через `std::env::var`). Если обязательной настройки нет — приложение сразу завершается с понятной ошибкой.
+Логи и трейсы в Rust — крейт `tracing`: `tracing::info!(order_id, total, "заказ создан")`, формат и уровни настраивает `tracing-subscriber` (например, через `RUST_LOG=info`).
+Тесты пишут в том же файле в модуле `#[cfg(test)] mod tests` с функциями `#[test]`; интеграционные — в папке `tests/`. Запуск — `cargo test`.
+```code
+use std::env;
+
+#[derive(Debug)]
+struct Config {
+    port: u16,
+    database_url: String,
+}
+
+fn load_config_from(get: impl Fn(&str) -> Option<String>) -> Result<Config, String> {
+    let port = get("PORT").unwrap_or_else(|| "8080".into()).parse::<u16>().map_err(|e| format!("PORT: {e}"))?;
+    let database_url = get("DATABASE_URL").ok_or("DATABASE_URL не задан")?;
+    Ok(Config { port, database_url })
+}
+
+fn main() {
+    let cfg = load_config_from(|k| env::var(k).ok());
+    println!("{}", cfg.is_err());        // true, если DATABASE_URL не задан
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_port_and_required_db() {
+        let cfg = load_config_from(|k| (k == "DATABASE_URL").then(|| "postgres://x".to_string())).unwrap();
+        assert_eq!(cfg.port, 8080);
+    }
+
+    #[test]
+    fn missing_db_is_error() {
+        assert!(load_config_from(|_| None).is_err());
+    }
+}
+```
+! Проверяйте конфигурацию при старте, а не при первом запросе
+! Передавайте источник настроек параметром — так конфиг легко тестировать
+! `tracing` вместо `println!` в сервисах
+? mc Где пишут модульные тесты в Rust?
++ В модуле #[cfg(test)] mod tests в том же файле
+- Только в отдельном проекте
+- В Cargo.toml
+- В main
+= Интеграционные тесты — в папке tests/.
+? out Что выведет код?
+```code
+fn main() {
+    let port = std::env::var("SURELY_UNSET_PORT").unwrap_or_else(|_| "8080".to_string());
+    let p: u16 = port.parse().unwrap_or(0);
+    println!("{}", p + 1);
+}
+```
+> 8081
+= Переменной нет — используется 8080.
+? fill Впишите атрибут функции-теста.
+```code
+#[___]
+fn adds() { assert_eq!(2 + 2, 4); }
+```
+> test
+= #[test] отмечает функцию как тест.
+? mc Какой крейт стандартно используют для логов и трейсов в асинхронных Rust-сервисах?
++ tracing
+- println
+- serde
+- clap
+= tracing поддерживает структурированные поля и спаны.
+
+@exam
+? mc Что такое крейт в Rust?
++ Единица компиляции и пакет, который можно подключить как зависимость
+- Тип ошибки
+- Поток
+- Макрос
+= Крейты публикуются на crates.io.
+? out Что выведет код?
+```code
+fn half(n: i32) -> Option<i32> { if n % 2 == 0 { Some(n / 2) } else { None } }
+
+fn main() {
+    println!("{:?} {:?}", half(10).and_then(half), half(6).and_then(half));
+}
+```
+> None None
+= and_then применяет half к результату: 10 → 5 → 5 нечётное, поэтому None; 6 → 3 → None.
+? fill Впишите команду линтера Rust.
+```code
+cargo ___
+```
+> clippy
+= clippy находит неидиоматичный и подозрительный код.
+? mc Чем `thiserror` отличается от `anyhow`?
++ thiserror помогает описать свои типизированные ошибки, anyhow — удобно передавать любые ошибки в приложении
+- Это одно и то же
+- anyhow для тестов
+- thiserror только для паники
+= Часто используют оба: thiserror в библиотечных слоях, anyhow в main.
+? mc Как Serde назовёт поле `customer_email` при `rename_all = "camelCase"`?
++ customerEmail
+- CustomerEmail
+- customer-email
+- CUSTOMER_EMAIL
+= camelCase — первое слово с маленькой буквы, следующие — с большой.
+? out Что выведет код?
+```code
+fn main() {
+    let r: Result<u32, String> = "15".parse::<u32>().map_err(|e| e.to_string());
+    match r {
+        Ok(n) if n > 10 => println!("много: {n}"),
+        Ok(n) => println!("мало: {n}"),
+        Err(e) => println!("ошибка: {e}"),
+    }
+}
+```
+> много: 15
+= match с условием-охранником.
+? mc Почему `unwrap` допустим в тестах?
++ Если значение неожиданно отсутствует, тест должен упасть — паника это и делает
+- В тестах unwrap не паникует
+- Тесты не компилируются без unwrap
+- Это не допустимо
+= В тестах паника и есть сигнал провала.
+? fill Впишите макрос для сравнения в тестах.
+```code
+___!(total, 3000);
+```
+> assert_eq
+= assert_eq! показывает оба значения при несовпадении.

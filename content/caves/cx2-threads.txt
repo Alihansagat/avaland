@@ -1,0 +1,322 @@
+@lang id=cppthreads name=Многопоточность C++ land=Пещера потоков color=#a4508b cave=cpp track=cppdev step=2
+@about Потоки, мьютексы, атомики, условные переменные и асинхронные задачи в современном C++.
+@why Вторая, потому что многопоточный код нужно собирать с санитайзерами из первой пещеры, а проверять тестами из третьей. Высоконагруженные системы, игры и финтех на C++ без многопоточности не обходятся.
+
+@lesson Потоки std::thread и std::jthread
+`std::thread t(func, args...)` запускает функцию в отдельном потоке. Поток нужно дождаться (`join`) или отпустить (`detach`) до уничтожения объекта, иначе программа аварийно завершится. `std::jthread` (C++20) сам делает `join` в деструкторе — безопаснее.
+Аргументы копируются в поток; чтобы передать ссылку, используют `std::ref`. Лямбды с захватом удобны, но захватывать по ссылке можно только то, что живёт дольше потока.
+Количество аппаратных потоков даёт `std::thread::hardware_concurrency()`. Создавать тысячи потоков дорого — для множества задач используют пул потоков.
+```code
+#include <iostream>
+#include <thread>
+#include <vector>
+#include <numeric>
+
+int main() {
+    std::vector<long long> data(1'000'000);
+    std::iota(data.begin(), data.end(), 1);           // 1..1 000 000
+
+    long long left = 0, right = 0;
+    auto half = data.begin() + data.size() / 2;
+    {
+        std::jthread a([&] { left = std::accumulate(data.begin(), half, 0LL); });
+        std::jthread b([&] { right = std::accumulate(half, data.end(), 0LL); });
+    }                                                  // jthread сами дождались потоков
+    std::cout << left + right << "\n";                 // 500000500000
+}
+```
+! Каждый `std::thread` должен быть `join` или `detach`, иначе `std::terminate`
+! `jthread` — предпочтительный вариант в C++20
+! Разные потоки пишут в разные переменные — гонки нет
+? mc Что произойдёт, если объект std::thread уничтожится без join или detach?
++ Программа аварийно завершится через std::terminate
+- Поток продолжит работу
+- Поток тихо остановится
+- Ничего
+= Это защита от забытых потоков.
+? out Что выведет код?
+```code
+#include <iostream>
+#include <thread>
+int main() {
+    int a = 0, b = 0;
+    { std::jthread t1([&] { a = 10; }); std::jthread t2([&] { b = 32; }); }
+    std::cout << a + b << "\n";
+}
+```
+> 42
+= Потоки пишут в разные переменные, после выхода из блока оба завершены.
+? fill Впишите тип потока C++20, который сам делает join.
+```code
+std::___ worker([] { work(); });
+```
+> jthread
+= jthread — joining thread.
+? mc Как передать переменную в поток по ссылке через конструктор std::thread?
++ Обернуть в std::ref
+- Передать указатель как строку
+- Это невозможно
+- Объявить static
+= Иначе аргумент скопируется.
+
+@lesson Гонки данных и мьютексы
+Гонка данных — два потока одновременно обращаются к одной переменной, и хотя бы один пишет. Результат непредсказуем, а по стандарту это неопределённое поведение: `counter++` из двух потоков потеряет часть увеличений.
+`std::mutex` защищает общие данные: только один поток держит блокировку. Блокировку берут через `std::lock_guard` или `std::scoped_lock` — они освободят мьютекс автоматически даже при исключении.
+Взаимная блокировка (deadlock) — два потока ждут мьютексы друг друга. Защита: брать несколько мьютексов одним `std::scoped_lock(m1, m2)` и держать блокировку как можно меньше.
+```code
+#include <iostream>
+#include <mutex>
+#include <thread>
+#include <vector>
+
+int main() {
+    long counter = 0;
+    std::mutex m;
+    std::vector<std::jthread> workers;
+    for (int t = 0; t < 4; ++t) {
+        workers.emplace_back([&] {
+            for (int i = 0; i < 100'000; ++i) {
+                std::scoped_lock lock(m);     // без блокировки результат был бы меньше
+                ++counter;
+            }
+        });
+    }
+    workers.clear();                          // дождаться всех
+    std::cout << counter << "\n";             // 400000
+}
+```
+! Любой общий изменяемый объект — под мьютексом или атомарный
+! `lock_guard`/`scoped_lock` вместо ручных `lock`/`unlock`
+! Держите блокировку как можно короче, не вызывайте под ней долгие операции
+? mc Что такое гонка данных?
++ Одновременный доступ потоков к одной переменной, когда хотя бы один пишет без синхронизации
+- Соревнование потоков по скорости
+- Ошибка компиляции
+- Утечка памяти
+= Это неопределённое поведение в C++.
+? out Что выведет код?
+```code
+#include <iostream>
+#include <mutex>
+#include <thread>
+int main() {
+    int c = 0; std::mutex m;
+    { std::jthread a([&] { for (int i = 0; i < 1000; ++i) { std::lock_guard g(m); ++c; } });
+      std::jthread b([&] { for (int i = 0; i < 1000; ++i) { std::lock_guard g(m); ++c; } }); }
+    std::cout << c << "\n";
+}
+```
+> 2000
+= С мьютексом ни одно увеличение не теряется.
+? mc Как избежать взаимной блокировки при захвате двух мьютексов?
++ Брать их вместе через std::scoped_lock(m1, m2) или всегда в одном порядке
+- Брать в случайном порядке
+- Не освобождать мьютексы
+- Использовать больше потоков
+= scoped_lock захватывает несколько мьютексов без deadlock.
+? fill Впишите класс RAII, который блокирует мьютекс до конца области видимости.
+```code
+std::___<std::mutex> guard(m);
+```
+> lock_guard
+= lock_guard освобождает мьютекс в деструкторе.
+
+@lesson Атомики и условные переменные
+`std::atomic<int>` выполняет простые операции (увеличение, обмен, сравнение) атомарно без мьютекса — быстро для счётчиков и флагов. `fetch_add`, `exchange`, `compare_exchange_strong` — основа lock-free алгоритмов.
+`std::condition_variable` позволяет потоку спать, пока не выполнится условие: потребитель ждёт `cv.wait(lock, [&]{ return !queue.empty(); })`, производитель кладёт задачу и вызывает `notify_one`. Условие в `wait` обязательно — из-за ложных пробуждений.
+Так строится очередь задач производитель — потребитель, на которой основаны пулы потоков.
+```code
+#include <atomic>
+#include <condition_variable>
+#include <iostream>
+#include <mutex>
+#include <queue>
+#include <thread>
+
+int main() {
+    std::atomic<int> processed{0};
+    std::queue<int> tasks;
+    std::mutex m;
+    std::condition_variable cv;
+    bool done = false;
+
+    std::jthread consumer([&] {
+        while (true) {
+            std::unique_lock lock(m);
+            cv.wait(lock, [&] { return !tasks.empty() || done; });
+            if (tasks.empty() && done) break;
+            tasks.pop();
+            lock.unlock();
+            processed.fetch_add(1);
+        }
+    });
+    for (int i = 0; i < 5; ++i) {
+        { std::lock_guard g(m); tasks.push(i); }
+        cv.notify_one();
+    }
+    { std::lock_guard g(m); done = true; }
+    cv.notify_one();
+    consumer.join();
+    std::cout << processed << "\n";        // 5
+}
+```
+! Атомики — для простых счётчиков и флагов, мьютексы — для сложных структур
+! `cv.wait` всегда с условием-предикатом
+! Изменяйте условие под тем же мьютексом, что и `wait`
+? mc Зачем условие в `cv.wait(lock, predicate)`?
++ Чтобы поток не продолжил работу при ложном пробуждении и не пропустил уже выполненное условие
+- Для ускорения
+- Это необязательное украшение
+- Чтобы разблокировать все потоки
+= wait с предикатом проверяет условие в цикле.
+? out Что выведет код?
+```code
+#include <atomic>
+#include <iostream>
+#include <thread>
+int main() {
+    std::atomic<int> n{0};
+    { std::jthread a([&] { for (int i = 0; i < 500; ++i) n++; });
+      std::jthread b([&] { for (int i = 0; i < 500; ++i) n++; }); }
+    std::cout << n.load() << "\n";
+}
+```
+> 1000
+= Атомарные увеличения не теряются.
+? fill Впишите шаблон для атомарной переменной.
+```code
+std::___<bool> stop{false};
+```
+> atomic
+= std::atomic гарантирует атомарность операций.
+? mc Когда лучше мьютекс, а не атомик?
++ Когда нужно согласованно изменить несколько полей или сложную структуру
+- Всегда для счётчика
+- Никогда
+- Только в однопоточной программе
+= Атомик защищает одну переменную, мьютекс — группу операций.
+
+@lesson std::async, future и параллельные алгоритмы
+`std::async(std::launch::async, f)` запускает задачу и возвращает `std::future`; `get()` ждёт результат и пробрасывает исключение из задачи. Это проще ручных потоков, когда нужен результат.
+`std::promise` позволяет передать результат из одного потока в другой вручную. Для множества мелких задач эффективнее пул потоков, чем `async` на каждую.
+Параллельные алгоритмы C++17: `std::sort(std::execution::par, v.begin(), v.end())`, `std::reduce(std::execution::par, ...)` — библиотека сама распределит работу по ядрам.
+```code
+#include <future>
+#include <iostream>
+#include <numeric>
+#include <vector>
+#include <stdexcept>
+
+long long sum_range(long long from, long long to) {
+    long long s = 0;
+    for (long long i = from; i < to; ++i) s += i;
+    return s;
+}
+
+int main() {
+    auto a = std::async(std::launch::async, sum_range, 0LL, 500'000LL);
+    auto b = std::async(std::launch::async, sum_range, 500'000LL, 1'000'000LL);
+    std::cout << a.get() + b.get() << "\n";         // 499999500000
+
+    auto failing = std::async(std::launch::async, [] () -> int { throw std::runtime_error("сбой"); });
+    try { failing.get(); }
+    catch (const std::exception& e) { std::cout << "ошибка: " << e.what() << "\n"; }
+}
+```
+! `future.get()` можно вызвать один раз
+! Исключение из задачи появится при `get()`
+! Для тысяч мелких задач — пул потоков, а не `async` на каждую
+? mc Что вернёт `std::async`?
++ std::future, из которого можно получить результат через get()
+- Сразу результат
+- Поток std::thread
+- Ничего
+= future — обещание результата в будущем.
+? out Что выведет код?
+```code
+#include <future>
+#include <iostream>
+int main() {
+    auto f = std::async(std::launch::async, [] { return 6 * 7; });
+    std::cout << f.get() << "\n";
+}
+```
+> 42
+= get ждёт и возвращает результат задачи.
+? mc Что произойдёт, если задача в std::async бросит исключение?
++ Оно будет проброшено при вызове get()
+- Программа сразу упадёт
+- Исключение потеряется
+- get вернёт 0
+= future хранит исключение до get.
+? fill Впишите политику запуска async в отдельном потоке.
+```code
+std::async(std::launch::___, task);
+```
+> async
+= launch::async гарантирует отдельный поток; deferred — ленивое выполнение при get.
+
+@exam
+? mc Почему `counter++` из двух потоков без защиты даёт неверный результат?
++ Это чтение, увеличение и запись; операции потоков перемешиваются и часть увеличений теряется
+- ++ не работает в потоках
+- Компилятор удаляет код
+- Потоки выполняются по очереди
+= Нужен мьютекс или atomic.
+? out Что выведет код?
+```code
+#include <iostream>
+#include <thread>
+#include <vector>
+int main() {
+    std::vector<int> r(3);
+    { std::vector<std::jthread> ts;
+      for (int i = 0; i < 3; ++i) ts.emplace_back([&r, i] { r[i] = i * i; }); }
+    std::cout << r[0] + r[1] + r[2] << "\n";
+}
+```
+> 5
+= Каждый поток пишет в свою ячейку: 0 + 1 + 4.
+? fill Впишите метод потока, который ждёт его завершения.
+```code
+t.___();
+```
+> join
+= join блокирует до завершения потока.
+? mc Какой инструмент находит гонки данных?
++ ThreadSanitizer (-fsanitize=thread)
+- clang-format
+- CMake
+- gdb без флагов
+= TSan отслеживает несинхронизированные доступы.
+? mc Что такое deadlock?
++ Потоки бесконечно ждут ресурсы, захваченные друг другом
+- Поток завершился с ошибкой
+- Утечка памяти
+- Слишком много потоков
+= Защита — единый порядок захвата и scoped_lock.
+? out Что выведет код?
+```code
+#include <future>
+#include <iostream>
+int main() {
+    std::promise<int> p;
+    auto f = p.get_future();
+    p.set_value(7);
+    std::cout << f.get() * 2 << "\n";
+}
+```
+> 14
+= promise передаёт значение в future.
+? mc Когда условная переменная лучше постоянной проверки флага в цикле?
++ Когда поток должен спать до события, не тратя процессор
+- Никогда
+- Только для атомиков
+- Когда событий нет
+= Активное ожидание сжигает ядро впустую.
+? fill Впишите метод condition_variable, который будит один ожидающий поток.
+```code
+cv.___();
+```
+> notify_one
+= notify_all будит всех ожидающих.

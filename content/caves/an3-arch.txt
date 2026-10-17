@@ -1,0 +1,303 @@
+@lang id=androidarch name=Архитектура и Hilt land=Пещера архитектуры Android color=#7f52ff cave=kt track=android step=3
+@about Как собирают Android-приложение в команде: ViewModel и UDF, слои, внедрение зависимостей Hilt, тесты и публикация.
+@why Последняя, потому что архитектура связывает экраны (первая пещера) и данные (вторая) в приложение, которое можно развивать и тестировать. Именно об этом спрашивают на собеседованиях Android-разработчиков.
+
+@lesson ViewModel и однонаправленный поток данных
+ViewModel хранит состояние экрана и переживает поворот. Экран получает от неё одно неизменяемое состояние (`StateFlow<UiState>`) и отправляет события (нажатия) вызовами методов — данные текут в одну сторону (UDF).
+Состояние описывают data-классом или sealed-интерфейсом: `Loading`, `Success(items)`, `Error(message)`. Экран просто рисует то, что пришло, и не содержит логики.
+Compose собирает состояние через `collectAsStateWithLifecycle()` — сбор приостанавливается, когда экран не виден.
+```code
+import androidx.lifecycle.*
+import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.launch
+
+sealed interface CoursesUi {
+    data object Loading : CoursesUi
+    data class Success(val titles: List<String>) : CoursesUi
+    data class Error(val message: String) : CoursesUi
+}
+
+class CoursesViewModel(private val repo: CourseRepository) : ViewModel() {
+    private val _ui = MutableStateFlow<CoursesUi>(CoursesUi.Loading)
+    val ui: StateFlow<CoursesUi> = _ui.asStateFlow()
+
+    init { load() }
+
+    fun load() = viewModelScope.launch {
+        _ui.value = CoursesUi.Loading
+        _ui.value = repo.courses().fold(
+            onSuccess = { CoursesUi.Success(it.map { c -> c.title }) },
+            onFailure = { CoursesUi.Error("Не удалось загрузить курсы") },
+        )
+    }
+}
+
+// @Composable fun CoursesScreen(vm: CoursesViewModel) {
+//     when (val s = vm.ui.collectAsStateWithLifecycle().value) {
+//         CoursesUi.Loading -> CircularProgressIndicator()
+//         is CoursesUi.Success -> CourseList(s.titles)
+//         is CoursesUi.Error -> ErrorView(s.message, onRetry = vm::load)
+//     }
+// }
+```
+! Наружу — только неизменяемый `StateFlow`, изменяемый `MutableStateFlow` — приватный
+! Экран рисует состояние и отправляет события, логики в нём нет
+! sealed-состояния заставляют обработать все случаи в `when`
+? mc Почему ViewModel отдаёт наружу StateFlow, а не MutableStateFlow?
++ Чтобы только ViewModel могла менять состояние, а экран лишь читал его
+- MutableStateFlow медленнее
+- StateFlow хранит больше данных
+- Так требует Compose
+= Однонаправленный поток данных: изменения идут только через методы ViewModel.
+? out Что выведет код?
+```code
+sealed interface Ui { data object Loading : Ui; data class Ok(val n: Int) : Ui; data class Err(val m: String) : Ui }
+fun render(s: Ui) = when (s) { Ui.Loading -> "..."; is Ui.Ok -> "n=${s.n}"; is Ui.Err -> "!${s.m}" }
+println(listOf(Ui.Loading, Ui.Ok(3), Ui.Err("x")).joinToString(" ") { render(it) })
+```
+> ... n=3 !x
+= when по sealed-интерфейсу обрабатывает все варианты состояния.
+? mc Что переживает ViewModel, в отличие от состояния в remember?
++ Поворот экрана и другие пересоздания конфигурации
+- Удаление приложения
+- Перезагрузку телефона
+- Ничего
+= ViewModel живёт дольше Activity при смене конфигурации.
+? fill Впишите метод Compose, который собирает StateFlow с учётом жизненного цикла.
+```code
+val state by vm.ui.___()
+```
+> collectAsStateWithLifecycle
+= Сбор приостанавливается, когда экран в фоне.
+
+@lesson Слои и чистая архитектура
+Приложение делят на слои: UI (экраны и ViewModel), domain (бизнес-правила, use case — необязательный слой), data (репозитории, сеть, база). Зависимости направлены внутрь: UI знает о domain, data реализует интерфейсы domain.
+Модели слоёв разные: DTO сети, Entity базы, доменная модель и UI-модель. Маппинг между ними держит изменения API от расползания по всему приложению.
+В больших проектах код делят на Gradle-модули по фичам (`:feature:courses`, `:core:network`) — сборка быстрее, границы явные.
+```code
+// domain
+data class Course(val id: Long, val title: String, val progress: Float)
+interface CourseRepository { suspend fun courses(): Result<List<Course>> }
+
+class GetActiveCoursesUseCase(private val repo: CourseRepository) {
+    suspend operator fun invoke(): Result<List<Course>> =
+        repo.courses().map { list -> list.filter { it.progress in 0.01f..0.99f }.sortedByDescending { it.progress } }
+}
+
+// data
+@kotlinx.serialization.Serializable
+data class CourseDto(val id: Long, val name: String, val done: Int, val total: Int)
+
+fun CourseDto.toDomain() = Course(id, name, if (total == 0) 0f else done.toFloat() / total)
+
+class CourseRepositoryImpl(private val api: CourseApi) : CourseRepository {
+    override suspend fun courses() = runCatching { api.courses().map { it.toDomain() } }
+}
+```
+! Зависимости направлены к domain, а не наоборот
+! DTO не попадают в UI — только доменные или UI-модели
+! Use case — одна бизнес-операция; не создавайте их ради формальности
+? mc Зачем маппить DTO в доменную модель?
++ Чтобы изменения формата API затрагивали только слой data
+- Чтобы ускорить сеть
+- Это требование Retrofit
+- Чтобы уменьшить APK
+= UI и бизнес-логика не зависят от структуры JSON.
+? out Что выведет код?
+```code
+data class Dto(val name: String, val done: Int, val total: Int)
+fun Dto.progress() = if (total == 0) 0f else done.toFloat() / total
+println(listOf(Dto("a", 2, 8), Dto("b", 0, 0)).map { it.progress() })
+```
+> [0.25, 0.0]
+= Функция-расширение защищает от деления на ноль.
+? mc В каком слое находятся Retrofit и Room?
++ data
+- domain
+- UI
+- Во всех сразу
+= Детали хранения и сети — в слое данных.
+? fill Впишите модификатор, позволяющий вызывать объект use case как функцию.
+```code
+___ fun invoke(): Result<List<Course>>
+```
+> operator
+= operator fun invoke позволяет писать useCase().
+
+@lesson Внедрение зависимостей с Hilt
+Hilt создаёт и передаёт зависимости по всему приложению. Класс приложения помечают `@HiltAndroidApp`, Activity — `@AndroidEntryPoint`, ViewModel — `@HiltViewModel` с `@Inject constructor(...)`.
+Как создавать объекты, которые нельзя пометить `@Inject` (Retrofit, Room), описывают модули: `@Module @InstallIn(SingletonComponent::class)` с функциями `@Provides`. Интерфейс связывают с реализацией через `@Binds`.
+`@Singleton` — один экземпляр на приложение (клиент сети, база). В Compose ViewModel получают через `hiltViewModel()`.
+```code
+import dagger.*
+import dagger.hilt.InstallIn
+import dagger.hilt.components.SingletonComponent
+import dagger.hilt.android.lifecycle.HiltViewModel
+import javax.inject.*
+
+@Module
+@InstallIn(SingletonComponent::class)
+object NetworkModule {
+    @Provides @Singleton
+    fun retrofit(): retrofit2.Retrofit = retrofit2.Retrofit.Builder().baseUrl("https://api.avaland.kz/").build()
+
+    @Provides @Singleton
+    fun courseApi(r: retrofit2.Retrofit): CourseApi = r.create(CourseApi::class.java)
+}
+
+@Module
+@InstallIn(SingletonComponent::class)
+abstract class RepoModule {
+    @Binds abstract fun courses(impl: CourseRepositoryImpl): CourseRepository
+}
+
+class CourseRepositoryImpl @Inject constructor(private val api: CourseApi) : CourseRepository {
+    override suspend fun courses() = runCatching { api.courses().map { it.toDomain() } }
+}
+
+@HiltViewModel
+class CoursesViewModel @Inject constructor(private val getActive: GetActiveCoursesUseCase) : androidx.lifecycle.ViewModel()
+```
+! `@Inject constructor` — для своих классов, `@Provides` — для чужих (Retrofit, Room)
+! `@Binds` связывает интерфейс с реализацией
+! `@Singleton` для дорогих объектов: клиент сети, база данных
+? mc Как Hilt узнаёт, как создать Retrofit?
++ Из функции с @Provides в модуле, установленном в нужный компонент
+- Сам находит в интернете
+- Через рефлексию всех классов
+- Никак, Retrofit создают вручную в Activity
+= Модули описывают, как создавать объекты сторонних библиотек.
+? mc Что делает `@Binds abstract fun repo(impl: RepoImpl): Repo`?
++ Говорит Hilt подставлять RepoImpl везде, где нужен интерфейс Repo
+- Создаёт новый интерфейс
+- Удаляет реализацию
+- Копирует данные
+= Привязка интерфейса к реализации.
+? fill Впишите аннотацию ViewModel для Hilt.
+```code
+@___
+class ProfileViewModel @Inject constructor(...)
+```
+> HiltViewModel
+= @HiltViewModel позволяет внедрять зависимости во ViewModel.
+? out Что выведет код?
+```code
+class Api { val created = System.identityHashCode(this) }
+object Graph { val api by lazy { Api() } }
+println(Graph.api === Graph.api)
+```
+> true
+= Синглтон: один экземпляр на всё приложение — так работает @Singleton.
+
+@lesson Тесты и публикация в Google Play
+ViewModel и use case тестируют обычными JUnit-тестами: подставляют фальшивый репозиторий и проверяют последовательность состояний. Для корутин — `runTest` и подмена главного диспетчера `Dispatchers.setMain(StandardTestDispatcher())`, для Flow удобна библиотека Turbine.
+Экраны Compose тестируют через `createComposeRule()`: найти элемент `onNodeWithText("Войти")`, нажать `performClick()`, проверить `assertIsDisplayed()`.
+Публикация: подписанный Android App Bundle (`./gradlew bundleRelease`), R8 сжимает и обфусцирует код, затем Google Play Console — внутреннее тестирование, закрытое, открытое и продакшен. Аккаунт разработчика Google Play стоит $25 один раз.
+```code
+import kotlinx.coroutines.test.*
+import org.junit.Test
+import org.junit.Assert.*
+
+class FakeRepo(var result: Result<List<Course>>) : CourseRepository {
+    override suspend fun courses() = result
+}
+
+class GetActiveCoursesUseCaseTest {
+    @Test
+    fun keepsOnlyStartedAndSortsByProgress() = runTest {
+        val repo = FakeRepo(Result.success(listOf(
+            Course(1, "Kotlin", 0.5f), Course(2, "Java", 0f), Course(3, "SQL", 0.9f), Course(4, "Go", 1f),
+        )))
+        val titles = GetActiveCoursesUseCase(repo)().getOrThrow().map { it.title }
+        assertEquals(listOf("SQL", "Kotlin"), titles)
+    }
+}
+
+// UI-тест:
+// @get:Rule val compose = createComposeRule()
+// compose.setContent { LoginScreen(onLogin = {}) }
+// compose.onNodeWithText("Войти").assertIsNotEnabled()
+```
+! Фальшивые репозитории проще и надёжнее моков для ViewModel и use case
+! `runTest` для suspend-кода в тестах
+! Публикуют App Bundle (.aab), а не APK
+? mc Чем удобно тестировать use case с фальшивым репозиторием?
++ Тест быстрый, не зависит от сети и базы и проверяет только бизнес-правила
+- Он проверяет сеть
+- Так тест медленнее, но надёжнее
+- Без фальшивок тесты невозможны
+= Изоляция от внешнего мира — основа модульных тестов.
+? out Что выведет код?
+```code
+data class Course(val title: String, val progress: Float)
+val all = listOf(Course("Kotlin", 0.5f), Course("Java", 0f), Course("SQL", 0.9f), Course("Go", 1f))
+println(all.filter { it.progress in 0.01f..0.99f }.sortedByDescending { it.progress }.map { it.title })
+```
+> [SQL, Kotlin]
+= Остаются начатые, но не законченные курсы, по убыванию прогресса.
+? fill Впишите функцию для тестов корутин.
+```code
+@Test fun loads() = ___ { ... }
+```
+> runTest
+= runTest из kotlinx-coroutines-test управляет виртуальным временем.
+? mc Какой формат загружают в Google Play?
++ Android App Bundle (.aab)
+- Исходный код
+- .exe
+- .ipa
+= Google Play сам собирает из бандла APK под каждое устройство.
+
+@exam
+? mc Что такое UDF (однонаправленный поток данных)?
++ Состояние идёт от ViewModel к экрану, события — от экрана к ViewModel
+- Данные можно менять из любого места
+- Только загрузка данных из сети
+- Анимация переходов
+= Так поведение экрана предсказуемо и тестируемо.
+? mc Где описать, как Hilt создаёт Room-базу?
++ В модуле с функцией @Provides @Singleton
+- В Activity через new
+- В Compose-функции
+- В AndroidManifest
+= Сторонние классы создаются в модулях.
+? out Что выведет код?
+```code
+fun load(states: MutableList<String>, ok: Boolean) { states += "Loading"; states += if (ok) "Success" else "Error" }
+val states = mutableListOf<String>()
+load(states, false); load(states, true)
+println(states.joinToString(","))
+```
+> Loading,Error,Loading,Success
+= Каждая загрузка проходит через Loading и заканчивается результатом — эту последовательность и проверяют в тестах ViewModel.
+? fill Впишите аннотацию класса Application для Hilt.
+```code
+@___
+class AvalandApp : Application()
+```
+> HiltAndroidApp
+= @HiltAndroidApp запускает генерацию графа зависимостей.
+? mc Какой слой не должен знать о Retrofit?
++ domain
+- data
+- модуль Hilt
+- сетевой модуль
+= Доменный слой не зависит от деталей реализации.
+? mc Зачем делить проект на Gradle-модули по фичам?
++ Чтобы ускорить сборку и сделать границы между частями приложения явными
+- Чтобы уменьшить число экранов
+- Это требование Google Play
+- Чтобы не писать тесты
+= Модули собираются параллельно и не видят лишнего.
+? fill Впишите функцию Compose для получения ViewModel из Hilt.
+```code
+val vm: CoursesViewModel = ___()
+```
+> hiltViewModel
+= hiltViewModel() создаёт или находит ViewModel с зависимостями.
+? mc Сколько стоит аккаунт разработчика Google Play?
++ $25 один раз
+- $99 в год
+- Бесплатно
+- $299 в месяц
+= Регистрационный взнос разовый.

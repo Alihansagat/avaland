@@ -1,0 +1,293 @@
+@lang id=androiddata name=Room и Retrofit land=Пещера данных Android color=#3ddc84 cave=kt track=android step=2
+@about Данные Android-приложения: сеть через Retrofit, локальная база Room, корутины и Flow, офлайн-режим.
+@why Вторая, потому что экраны из первой пещеры должны показывать настоящие данные: загружать их из сети и хранить на телефоне, чтобы приложение работало без интернета.
+
+@lesson Retrofit: запросы к API
+Retrofit превращает интерфейс Kotlin в HTTP-клиент: методы с аннотациями `@GET("users/{id}")`, `@POST`, параметры — `@Path`, `@Query`, `@Body`. Функции делают `suspend`, и их вызывают из корутин.
+JSON превращается в data-классы через kotlinx.serialization (или Moshi, Gson): поля с `@Serializable`, имена — `@SerialName`, если в API они в snake_case.
+Сеть ненадёжна: оборачивайте вызовы в `try/catch` или `runCatching`, обрабатывайте коды ответа и таймауты. Разрешение на интернет — в `AndroidManifest.xml`.
+```code
+import kotlinx.serialization.*
+import retrofit2.http.*
+
+@Serializable
+data class RepoDto(
+    val id: Long,
+    val name: String,
+    @SerialName("stargazers_count") val stars: Int,
+)
+
+interface GitHubApi {
+    @GET("users/{user}/repos")
+    suspend fun repos(@Path("user") user: String, @Query("per_page") perPage: Int = 30): List<RepoDto>
+}
+
+// создание клиента:
+// val api = Retrofit.Builder()
+//     .baseUrl("https://api.github.com/")
+//     .addConverterFactory(Json { ignoreUnknownKeys = true }.asConverterFactory("application/json".toMediaType()))
+//     .build()
+//     .create(GitHubApi::class.java)
+
+suspend fun topRepos(api: GitHubApi, user: String): Result<List<String>> = runCatching {
+    api.repos(user).sortedByDescending { it.stars }.take(3).map { it.name }
+}
+```
+! Сетевые функции Retrofit — `suspend`, вызывайте их из корутин
+! `ignoreUnknownKeys = true` — API добавит поле, а приложение не упадёт
+! Каждый сетевой вызов может упасть — обрабатывайте ошибки
+? mc Что делает аннотация `@Path("user")`?
++ Подставляет значение параметра в {user} в адресе запроса
+- Добавляет ?user= в адрес
+- Кладёт значение в тело запроса
+- Сохраняет путь к файлу
+= @Query добавляет параметр строки запроса, @Path — часть пути.
+? out Что выведет код?
+```code
+data class Repo(val name: String, val stars: Int)
+val repos = listOf(Repo("a", 5), Repo("b", 50), Repo("c", 20), Repo("d", 1))
+println(repos.sortedByDescending { it.stars }.take(2).map { it.name })
+```
+> [b, c]
+= Две самые популярные по звёздам.
+? fill Впишите модификатор функции Retrofit, чтобы вызывать её из корутины.
+```code
+@GET("me") ___ fun me(): UserDto
+```
+> suspend
+= suspend-функция приостанавливается, не блокируя поток.
+? out Что выведет код?
+```code
+val r = runCatching { "abc".toInt() }
+println("${r.isFailure} ${r.getOrDefault(-1)}")
+```
+> true -1
+= Ошибка поймана в Result, getOrDefault вернул запасное значение.
+
+@lesson Room: локальная база
+Room — обёртка над SQLite: `@Entity` описывает таблицу, `@Dao` — интерфейс с запросами (`@Query`, `@Insert`, `@Update`, `@Delete`), `@Database` связывает всё вместе. SQL в `@Query` проверяется при компиляции.
+Метод DAO, возвращающий `Flow<List<T>>`, сам присылает новый список при каждом изменении таблицы — экран обновляется автоматически.
+При изменении схемы повышают версию базы и пишут миграцию; иначе после обновления приложения пользователь получит падение или потеряет данные.
+```code
+import androidx.room.*
+import kotlinx.coroutines.flow.Flow
+
+@Entity(tableName = "notes")
+data class NoteEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val text: String,
+    val createdAt: Long = System.currentTimeMillis(),
+    val pinned: Boolean = false,
+)
+
+@Dao
+interface NoteDao {
+    @Query("SELECT * FROM notes ORDER BY pinned DESC, createdAt DESC")
+    fun observeAll(): Flow<List<NoteEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(note: NoteEntity): Long
+
+    @Query("DELETE FROM notes WHERE id = :id")
+    suspend fun delete(id: Long)
+}
+
+@Database(entities = [NoteEntity::class], version = 1)
+abstract class AppDb : RoomDatabase() {
+    abstract fun notes(): NoteDao
+}
+```
+! Запросы, которые меняют данные, — `suspend`; наблюдение — через `Flow`
+! Room не даёт выполнять запросы в главном потоке
+! Новая версия схемы — новая миграция
+? mc Что вернёт DAO-метод с типом `Flow<List<NoteEntity>>`?
++ Поток, который присылает новый список при каждом изменении таблицы
+- Список один раз
+- Одну запись
+- Ничего, это ошибка
+= Room сам отслеживает изменения и обновляет подписчиков.
+? mc Что нужно сделать при добавлении нового столбца в Entity в уже вышедшем приложении?
++ Повысить версию базы и добавить миграцию
+- Ничего, Room сам всё сделает без потерь
+- Удалить приложение у пользователей
+- Переименовать базу
+= Миграция переносит данные пользователей в новую схему.
+? out Что выведет код?
+```code
+data class Note(val text: String, val pinned: Boolean, val created: Long)
+val notes = listOf(Note("a", false, 3), Note("b", true, 1), Note("c", false, 5))
+println(notes.sortedWith(compareByDescending<Note> { it.pinned }.thenByDescending { it.created }).map { it.text })
+```
+> [b, c, a]
+= Сначала закреплённые, затем по убыванию времени — как ORDER BY pinned DESC, createdAt DESC.
+? fill Впишите аннотацию Room для интерфейса с запросами.
+```code
+@___
+interface UserDao
+```
+> Dao
+= DAO — Data Access Object.
+
+@lesson Корутины и Flow
+Корутины — лёгкие потоки Kotlin: `suspend`-функции ждут сеть или базу, не блокируя главный поток. В ViewModel их запускают в `viewModelScope.launch { }` — корутины отменятся, когда экран закроют.
+Диспетчеры: `Dispatchers.Main` — интерфейс, `Dispatchers.IO` — сеть и файлы, `Dispatchers.Default` — тяжёлые вычисления. Retrofit и Room сами переключаются на нужный поток.
+`Flow` — асинхронный поток значений. Операторы `map`, `filter`, `combine`, `debounce` преобразуют его, `stateIn` превращает в `StateFlow` для экрана. Параллельные запросы — `coroutineScope { async { } ... await() }`.
+```code
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.*
+
+fun main() = runBlocking {
+    val queries = flowOf("k", "ko", "kot", "kotl", "kotlin")
+    queries
+        .filter { it.length >= 3 }
+        .map { "поиск: $it" }
+        .collect { println(it) }
+
+    val time = measureTimeMillis {
+        val (a, b) = coroutineScope {
+            val x = async { delay(300); 1 }
+            val y = async { delay(300); 2 }
+            x.await() to y.await()
+        }
+        println(a + b)
+    }
+    println(time < 550)          // запросы шли параллельно
+}
+
+inline fun measureTimeMillis(block: () -> Unit): Long {
+    val start = System.currentTimeMillis(); block(); return System.currentTimeMillis() - start
+}
+```
+! Запускайте корутины в `viewModelScope` или `lifecycleScope`, а не в `GlobalScope`
+! `async` + `await` — для параллельных независимых запросов
+! `StateFlow` — состояние экрана, которое Compose собирает через `collectAsStateWithLifecycle`
+? mc Почему не стоит запускать корутины в GlobalScope?
++ Они не отменятся при закрытии экрана и могут работать впустую или течь
+- GlobalScope медленнее
+- Это не компилируется
+- GlobalScope блокирует главный поток
+= Структурированная конкурентность привязывает корутины к жизненному циклу.
+? mc Что выдаст `flowOf(1, 2, 3, 4).map { it * it }.filter { it > 4 }.toList()`?
++ [9, 16]
+- [1, 4, 9, 16]
+- [4, 9, 16]
+- [3, 4]
+= Квадраты 1, 4, 9, 16; больше 4 — 9 и 16.
+? fill Впишите диспетчер для сетевых и файловых операций.
+```code
+withContext(Dispatchers.___) { file.readText() }
+```
+> IO
+= Dispatchers.IO рассчитан на блокирующий ввод-вывод.
+? mc Как выполнить два независимых запроса одновременно?
++ Запустить оба через async и дождаться await
+- Вызвать по очереди
+- Использовать Thread.sleep
+- Сделать один запрос
+= Время ожидания примерно равно самому долгому запросу.
+
+@lesson Репозиторий и офлайн-режим
+Репозиторий объединяет источники данных: экран подписан на базу Room (единственный источник правды), а обновление идёт из сети и записывается в базу. Так приложение мгновенно показывает сохранённые данные и работает без интернета.
+Ошибку сети не показывают пустым экраном: данные из базы остаются, а сверху — сообщение «нет связи, показаны сохранённые».
+Фоновую синхронизацию по расписанию или при появлении сети делает WorkManager — он выполнит задачу даже после перезапуска телефона.
+```code
+import kotlinx.coroutines.flow.Flow
+
+class NotesRepository(
+    private val dao: NoteDao,
+    private val api: NotesApi,
+) {
+    val notes: Flow<List<NoteEntity>> = dao.observeAll()     // экран читает только базу
+
+    suspend fun refresh(): Result<Int> = runCatching {
+        val remote = api.notes()                              // может бросить исключение
+        remote.forEach { dao.upsert(NoteEntity(id = it.id, text = it.text)) }
+        remote.size
+    }
+}
+
+// ViewModel:
+// init { viewModelScope.launch { repo.refresh().onFailure { _error.value = "Нет связи — показаны сохранённые заметки" } } }
+// val state = repo.notes.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+```
+! База — единственный источник правды для экрана
+! Ошибка сети не должна стирать уже показанные данные
+! WorkManager — для синхронизации, которая обязана выполниться
+? mc Почему экран читает данные из Room, а не напрямую из сети?
++ Данные показываются мгновенно и без интернета, а сеть только обновляет базу
+- Room быстрее Retrofit
+- Сеть нельзя вызывать из ViewModel
+- Так меньше кода
+= Подход offline-first.
+? out Что выведет код?
+```code
+val cached = listOf("a", "b")
+val result = runCatching<List<String>> { throw RuntimeException("нет сети") }
+val shown = result.getOrElse { cached }
+println("${shown.size} ${result.exceptionOrNull()?.message}")
+```
+> 2 нет сети
+= При ошибке сети показываем кэш и сообщение.
+? fill Впишите компонент Jetpack для гарантированной фоновой работы.
+```code
+___.getInstance(context).enqueue(syncRequest)
+```
+> WorkManager
+= WorkManager выполняет отложенные и периодические задачи.
+? mc Что показать пользователю, если обновление из сети не удалось, а в базе есть данные?
++ Сохранённые данные и ненавязчивое сообщение об ошибке связи
+- Пустой экран с ошибкой
+- Закрыть приложение
+- Ничего не показывать
+= Ошибка сети не должна мешать работать с уже загруженными данными.
+
+@exam
+? mc Какая библиотека превращает интерфейс Kotlin в HTTP-клиент?
++ Retrofit
+- Room
+- Hilt
+- Compose
+= Retrofit генерирует реализацию API по аннотациям.
+? mc Где выполнять запрос к базе Room?
++ В suspend-функции из корутины, не на главном потоке
+- В onDraw
+- В главном потоке синхронно
+- В конструкторе Activity
+= Room запрещает блокировать главный поток.
+? out Что выведет код?
+```code
+val stars = mapOf("a" to 10, "b" to 3, "c" to 7)
+println(stars.filterValues { it >= 5 }.keys.sorted())
+```
+> [a, c]
+= Ключи со значениями от 5.
+? fill Впишите тип Room-метода, который наблюдает за изменениями таблицы.
+```code
+fun observe(): ___<List<UserEntity>>
+```
+> Flow
+= Flow присылает новые данные при изменениях.
+? mc Что делает `viewModelScope.launch`?
++ Запускает корутину, которая отменится, когда ViewModel будет уничтожена
+- Запускает новый поток навсегда
+- Перезапускает приложение
+- Сохраняет состояние в базу
+= viewModelScope привязан к жизни ViewModel.
+? mc Пользователь открыл приложение в метро без сети. Что должно произойти при offline-first подходе?
++ Он увидит последние сохранённые данные
+- Пустой экран
+- Падение приложения
+- Бесконечную загрузку
+= Данные берутся из локальной базы.
+? mc Что вернёт `coroutineScope { val a = async { 2 }; val b = async { 3 }; a.await() * b.await() }`?
++ 6
+- 5
+- Deferred-объект
+- Ошибку: async нельзя вызывать дважды
+= await возвращает результат каждой корутины, их произведение — 6.
+? mc Зачем `ignoreUnknownKeys = true` в настройках JSON?
++ Чтобы новые поля в ответе API не ломали разбор данных
+- Чтобы пропускать пустые ответы
+- Чтобы ускорить сеть
+- Чтобы шифровать JSON
+= Сервер может добавлять поля, и старая версия приложения должна работать.

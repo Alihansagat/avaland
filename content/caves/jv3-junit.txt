@@ -1,0 +1,329 @@
+@lang id=junit name=JUnit 5 и Mockito land=Пещера тестов Java color=#25a162 cave=java track=jvm step=3
+@about Тестирование Java-кода: модульные тесты, моки, тесты Spring-контроллеров и интеграция с настоящей базой.
+@why Последняя, потому что тестируют сервисы, репозитории и контроллеры, которые вы написали в первых пещерах. Покрытие тестами — обязательное требование в командах.
+
+@lesson Модульные тесты на JUnit 5
+Тест — метод с аннотацией `@Test` в классе из `src/test/java`. Проверки делают через `assertEquals(expected, actual)`, `assertTrue`, `assertThrows`. AssertJ даёт более читаемый стиль: `assertThat(list).hasSize(3).contains("a")`.
+`@BeforeEach` выполняется перед каждым тестом — для подготовки объектов. `@DisplayName` даёт тесту понятное название, `@ParameterizedTest` прогоняет один тест на многих входах.
+Тесты запускает `./mvnw test`. Хорошее имя теста описывает поведение: `discountIsZeroForSmallOrders`.
+```code
+import org.junit.jupiter.api.*;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import static org.junit.jupiter.api.Assertions.*;
+
+class PriceCalculator {
+    int total(int sum, int discountPercent) {
+        if (discountPercent < 0 || discountPercent > 100) throw new IllegalArgumentException("скидка 0..100");
+        return sum * (100 - discountPercent) / 100;
+    }
+}
+
+class PriceCalculatorTest {
+    PriceCalculator calc;
+
+    @BeforeEach
+    void setUp() { calc = new PriceCalculator(); }
+
+    @Test
+    void appliesDiscount() { assertEquals(900, calc.total(1000, 10)); }
+
+    @Test
+    void rejectsWrongDiscount() {
+        var e = assertThrows(IllegalArgumentException.class, () -> calc.total(100, 150));
+        assertTrue(e.getMessage().contains("0..100"));
+    }
+
+    @ParameterizedTest
+    @CsvSource({"1000,0,1000", "1000,50,500", "0,30,0"})
+    void table(int sum, int d, int expected) { assertEquals(expected, calc.total(sum, d)); }
+}
+```
+! Порядок в assertEquals: сначала ожидаемое, потом фактическое
+! `@BeforeEach` — новый объект для каждого теста, тесты независимы
+! Параметризованные тесты убирают копипасту
+? mc Сколько раз выполнится метод с @BeforeEach, если в классе 5 тестов?
++ 5 — перед каждым тестом
+- 1
+- 0
+- 10
+= Каждый тест получает свежее состояние.
+? out Что выведет код?
+```code
+int sum = 1000, d = 15;
+System.out.println(sum * (100 - d) / 100);
+```
+> 850
+= 15% скидки от 1000.
+? fill Впишите метод JUnit, который проверяет, что код бросает исключение.
+```code
+___(IllegalArgumentException.class, () -> calc.total(1, -5));
+```
+> assertThrows
+= assertThrows возвращает пойманное исключение для дальнейших проверок.
+? mc Какая аннотация прогоняет тест на нескольких наборах данных?
++ @ParameterizedTest
+- @RepeatedTest
+- @Disabled
+- @Nested
+= Данные подаются через @CsvSource, @ValueSource и другие.
+
+@lesson Моки с Mockito
+Mockito создаёт подставные объекты: `@Mock PaymentGateway gateway` — объект, у которого все методы ничего не делают. Поведение задают через `when(gateway.charge(100)).thenReturn(true)`, проверяют вызовы — `verify(gateway).charge(100)`.
+`@InjectMocks` создаёт тестируемый класс и подставляет в него моки. Класс тестов помечают `@ExtendWith(MockitoExtension.class)`.
+Мокают внешние зависимости: платёжный шлюз, отправку почты, репозиторий. Саму логику тестируемого класса не мокают.
+```code
+import org.junit.jupiter.api.*;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.*;
+import org.mockito.junit.jupiter.MockitoExtension;
+import static org.mockito.Mockito.*;
+import static org.junit.jupiter.api.Assertions.*;
+
+interface PaymentGateway { boolean charge(long amount); }
+interface Mailer { void send(String to, String text); }
+
+class OrderService {
+    private final PaymentGateway gateway; private final Mailer mailer;
+    OrderService(PaymentGateway g, Mailer m) { gateway = g; mailer = m; }
+    String pay(String email, long amount) {
+        if (!gateway.charge(amount)) return "DECLINED";
+        mailer.send(email, "Оплата " + amount + " ₸ прошла");
+        return "PAID";
+    }
+}
+
+@ExtendWith(MockitoExtension.class)
+class OrderServiceTest {
+    @Mock PaymentGateway gateway;
+    @Mock Mailer mailer;
+    @InjectMocks OrderService service;
+
+    @Test
+    void sendsReceiptWhenPaid() {
+        when(gateway.charge(5000)).thenReturn(true);
+        assertEquals("PAID", service.pay("ada@mail.kz", 5000));
+        verify(mailer).send(eq("ada@mail.kz"), contains("5000"));
+    }
+
+    @Test
+    void noEmailWhenDeclined() {
+        when(gateway.charge(anyLong())).thenReturn(false);
+        assertEquals("DECLINED", service.pay("ada@mail.kz", 5000));
+        verifyNoInteractions(mailer);
+    }
+}
+```
+! Мокайте внешний мир, а не тестируемую логику
+! `verify` проверяет, что нужный вызов произошёл, `verifyNoInteractions` — что не было вызовов
+! Если для теста нужно 10 моков — класс делает слишком много
+? mc Что делает `when(repo.findById(1L)).thenReturn(Optional.of(user))`?
++ Задаёт, что мок вернёт этот Optional при вызове findById(1L)
+- Сохраняет пользователя в базу
+- Проверяет, что метод был вызван
+- Удаляет пользователя
+= Это настройка поведения заглушки.
+? mc Как проверить, что письмо НЕ отправлялось?
++ verifyNoInteractions(mailer) или verify(mailer, never()).send(any(), any())
+- assertNull(mailer)
+- when(mailer).thenThrow()
+- Никак
+= Mockito умеет проверять отсутствие вызовов.
+? out Что выведет код?
+```code
+import java.util.*;
+List<String> sent = new ArrayList<>();
+java.util.function.Function<Long, Boolean> charge = a -> a <= 10_000;
+long amount = 5000;
+String result = charge.apply(amount) ? "PAID" : "DECLINED";
+if (result.equals("PAID")) sent.add("receipt");
+System.out.println(result + " " + sent.size());
+```
+> PAID 1
+= Ручная «заглушка» платежа одобряет сумму, и квитанция отправляется.
+? fill Впишите аннотацию, которая создаёт тестируемый объект с подставленными моками.
+```code
+@___ OrderService service;
+```
+> InjectMocks
+= @InjectMocks внедряет @Mock-объекты через конструктор.
+
+@lesson Тесты Spring-контроллеров
+`@WebMvcTest(ProductController.class)` поднимает только веб-слой: контроллеры, валидацию, обработчики ошибок — без базы и сервисов. Сервисы подменяют моками через `@MockitoBean`.
+`MockMvc` отправляет запросы без настоящего сервера: `mvc.perform(get("/api/products/1"))` и проверяет ответ: `andExpect(status().isOk())`, `jsonPath("$.name").value("Ноутбук")`.
+Такие тесты проверяют маршруты, статусы, формат JSON и валидацию — быстро, за доли секунды.
+```code
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.web.servlet.MockMvc;
+import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
+
+@WebMvcTest(ProductController.class)
+class ProductControllerTest {
+    @Autowired MockMvc mvc;
+    @MockitoBean ProductService service;
+
+    @Test
+    void returnsProduct() throws Exception {
+        when(service.find(1L)).thenReturn(new Product(1, "Ноутбук", 450000));
+        mvc.perform(get("/api/products/1"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.name").value("Ноутбук"));
+    }
+
+    @Test
+    void validatesBody() throws Exception {
+        mvc.perform(post("/api/products").contentType("application/json").content("{\"name\":\"\"}"))
+           .andExpect(status().isBadRequest());
+    }
+}
+```
+! `@WebMvcTest` — только веб-слой, быстрый тест
+! Сервисы в веб-тестах — моки через `@MockitoBean`
+! `jsonPath` проверяет поля ответа
+? mc Что поднимает `@WebMvcTest`?
++ Только веб-слой: контроллеры, валидацию и обработку ошибок
+- Всё приложение с базой
+- Только базу данных
+- Браузер
+= Поэтому тест быстрый, а сервисы нужно подменить.
+? mc Как проверить поле `price` в JSON-ответе?
++ jsonPath("$.price").value(450000)
+- assertEquals в контроллере
+- status().isOk()
+- verify(price)
+= jsonPath читает поле по выражению.
+? fill Впишите объект Spring для запросов к контроллерам в тестах без сервера.
+```code
+@Autowired ___ mvc;
+```
+> MockMvc
+= MockMvc имитирует HTTP-запросы.
+? out Что выведет код?
+```code
+int[] statuses = {200, 400, 404, 201};
+int ok = 0;
+for (int s : statuses) if (s >= 200 && s < 300) ok++;
+System.out.println(ok);
+```
+> 2
+= Успешные коды 2xx: 200 и 201.
+
+@lesson Интеграционные тесты и Testcontainers
+`@SpringBootTest` поднимает приложение целиком. Чтобы проверить работу с настоящей базой, используют Testcontainers: тест запускает PostgreSQL в Docker-контейнере, а Spring подключается к нему через `@ServiceConnection`.
+`@DataJpaTest` — облегчённый вариант только для репозиториев: проверяет, что запросы и связи работают на реальной СУБД, а не на H2, которая ведёт себя иначе.
+Тесты гоняют в CI на каждый pull request; отчёт о покрытии строит JaCoCo. Цель — не 100% покрытия, а уверенность в важных сценариях.
+```code
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
+import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
+import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.junit.jupiter.*;
+import static org.assertj.core.api.Assertions.assertThat;
+
+@DataJpaTest
+@Testcontainers
+@AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
+class BookRepositoryIT {
+    @Container @ServiceConnection
+    static PostgreSQLContainer<?> pg = new PostgreSQLContainer<>("postgres:17");
+
+    @Autowired BookRepository repo;
+
+    @Test
+    void findsByTitleIgnoringCase() {
+        repo.save(new Book("Effective Java", 2018));
+        repo.save(new Book("Java Concurrency", 2006));
+        assertThat(repo.findByTitleContainingIgnoreCase("JAVA")).hasSize(2);
+    }
+}
+```
+! Тестируйте запросы на той же СУБД, что в проде, — Testcontainers
+! `@DataJpaTest` — для репозиториев, `@SpringBootTest` — для полного сценария
+! Интеграционных тестов меньше, чем модульных: они медленнее
+? mc Зачем Testcontainers вместо H2 в тестах?
++ Тест идёт на настоящем PostgreSQL, поэтому ловит ошибки, которых H2 не покажет
+- H2 платная
+- Testcontainers быстрее модульных тестов
+- H2 не поддерживает Java
+= Разные СУБД отличаются диалектом и поведением.
+? mc Какой тест поднимает приложение целиком?
++ @SpringBootTest
+- @WebMvcTest
+- @DataJpaTest
+- Обычный @Test
+= SpringBootTest загружает весь контекст.
+? fill Впишите аннотацию для тестов репозиториев JPA.
+```code
+@___
+class UserRepositoryTest {}
+```
+> DataJpaTest
+= @DataJpaTest настраивает только слой данных.
+? out Что выведет код?
+```code
+import java.util.*;
+var titles = List.of("Effective Java", "Java Concurrency", "Kotlin in Action");
+System.out.println(titles.stream().filter(t -> t.toUpperCase().contains("JAVA")).count());
+```
+> 2
+= Два названия содержат JAVA без учёта регистра.
+
+@exam
+? mc Что такое модульный тест?
++ Проверка одного класса или метода в изоляции от базы, сети и других сервисов
+- Тест всего приложения в браузере
+- Проверка производительности
+- Ручное тестирование
+= Внешние зависимости заменяют моками.
+? mc Тест падает только при запуске вместе с другими тестами. Вероятная причина?
++ Тесты зависят от общего изменяемого состояния
+- JUnit сломан
+- Нужно больше моков
+- Неверный JDK
+= Каждый тест должен готовить своё состояние сам.
+? fill Впишите метод Mockito, который проверяет вызов мока.
+```code
+___(gateway).charge(100L);
+```
+> verify
+= verify проверяет, что метод вызывался с такими аргументами.
+? out Что выведет код?
+```code
+int[][] cases = {{1000, 0, 1000}, {1000, 50, 500}, {200, 25, 150}};
+int passed = 0;
+for (int[] c : cases) if (c[0] * (100 - c[1]) / 100 == c[2]) passed++;
+System.out.println(passed);
+```
+> 3
+= Все три случая параметризованного теста проходят.
+? mc Какой слой проверяет @WebMvcTest?
++ Контроллеры и всё, что связано с HTTP
+- Репозитории
+- Миграции
+- Docker
+= Веб-слой без бизнес-логики.
+? mc Где лучше проверить сложный запрос репозитория к PostgreSQL?
++ В @DataJpaTest с Testcontainers
+- В модульном тесте с моком репозитория
+- Вручную в проде
+- Нигде
+= Запрос нужно выполнить на настоящей базе.
+? mc Что значит 100% покрытия тестами?
++ Каждая строка выполнялась в тестах, но это не гарантирует, что поведение проверено правильно
+- В коде нет ошибок
+- Тесты не нужны
+- Код быстрый
+= Покрытие показывает выполнение строк, а не качество проверок.
+? fill Впишите команду Maven Wrapper для запуска тестов.
+```code
+./mvnw ___
+```
+> test
+= mvn test запускает тесты проекта.
