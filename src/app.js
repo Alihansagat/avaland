@@ -4,7 +4,7 @@
 
 const LANGS = window.AVA_CONTENT;
 const DEV = !!window.AVA_DEV;
-const VERSION = "1.2.0";
+const VERSION = "1.3.0";
 const APP_STORE_ID = "";            // впишите id приложения из App Store Connect, чтобы появилась кнопка «Оценить»
 const DAY = 864e5, HOLD = 14, WARN = 10, KEY = "avaland-v2";
 const LESSON_PASS = 3, EXAM_RATE = 0.8, EXAM_COOLDOWN_MIN = 30;
@@ -36,7 +36,8 @@ const fresh = () => ({
   ach: {},
   settings: { goal: 50, remind: true, hour: 19, sound: true, haptics: true },
   offset: 0, sel: null, tab: "map", last: null, reviewAsked: false,
-  practice: {}, drafts: {}, lang: "py", leet: null, tracks: {}
+  practice: {}, drafts: {}, lang: "py", leet: null, tracks: {},
+  coins: 0, coinsAt: 0, inv: { freeze: 0, hint: 0, reveal: 0, retake: 0 }, frozen: {}, coupons: {}, owned: {}, boost: 0, goalDay: ""
 });
 let S = fresh();
 
@@ -89,14 +90,15 @@ const trackOpen = tid => DEV || passed(IDX[TRACKS[tid].parent]);
 const trackCaves = tid => TRACKS[tid].caves.map(c => IDX[c]).filter(x => x != null);
 const trackDoneN = tid => trackCaves(tid).filter(passed).length;
 const trackDone = tid => trackCaves(tid).length > 0 && trackDoneN(tid) === trackCaves(tid).length;
-function caveOpen(l) {
+function caveReady(l) {
   const L = LANGS[l]; if (!L.cave) return true;
   const T = TRACKS[L.track]; if (!T) return false;
   if (!trackOpen(L.track)) return false;
   const k = T.caves.indexOf(L.id);
   return DEV || k <= 0 || passed(IDX[T.caves[k - 1]]);
 }
-function caveState(l) { return passed(l) ? "done" : !caveOpen(l) ? "locked" : anyRec(l) ? "progress" : "open"; }
+const caveOpen = l => caveReady(l) && !premiumLocked(l);
+function caveState(l) { return passed(l) ? "done" : premiumLocked(l) ? "premium" : !caveReady(l) ? "locked" : anyRec(l) ? "progress" : "open"; }
 
 function stats() {
   let held = 0, total = 0, mastered = 0, next = null; const siege = [];
@@ -114,8 +116,11 @@ function stats() {
   const caves = CAVES.filter((_, k) => passed(NCOUNTRY + k)).length, tracks = TIDS.filter(trackDone).length;
   return { pct: Math.round(held / total * 100), held, total, mastered, siege, next, certs, caves, tracks };
 }
-function addXP(n) { S.xp += n; const k = dayKey(now()); S.days[k] = (S.days[k] || 0) + n; }
-function streak() { let n = 0, t = now(); if (!S.days[dayKey(t)]) t -= DAY; while (S.days[dayKey(t)]) { n++; t -= DAY; } return n; }
+function addXP(n) {
+  S.xp += n; const k = dayKey(now()); S.days[k] = (S.days[k] || 0) + n;
+  if (S.days[k] >= S.settings.goal && S.goalDay !== k) { S.goalDay = k; setTimeout(() => { addCoins(20, $("#coin-chip"), "silent"); toast("Цель дня выполнена: +20 монет"); sfx("level"); }, 1600); }
+}
+function streak() { let n = 0, t = now(); if (!dayActive(dayKey(t))) t -= DAY; while (dayActive(dayKey(t))) { n++; t -= DAY; } return n; }
 const todayXP = () => S.days[dayKey(now())] || 0;
 
 /* ---------------- achievements ---------------- */
@@ -149,7 +154,8 @@ const ACH = [
 function checkAch() {
   const s = stats(), st = streak(), got = [];
   ACH.forEach(([id, t, , fn]) => { if (!S.ach[id] && fn(s, st)) { S.ach[id] = now(); got.push(t); } });
-  got.forEach((t, k) => setTimeout(() => toast("Достижение: " + t), 900 + k * 2400));
+  if (got.length) { S.coins = (S.coins || 0) + 25 * got.length; S.coinsAt = Date.now(); }
+  got.forEach((t, k) => setTimeout(() => { toast(`Достижение: ${t} · +25 монет`); sfx("level"); bumpCoins(); }, 900 + k * 2400));
 }
 
 /* ---------------- native bridges ---------------- */
@@ -161,20 +167,7 @@ function haptic(kind) {
     else P.Haptics.impact({ style: "LIGHT" });
   } catch (e) {}
 }
-let AC = null;
-function beep(kind) {
-  if (!S.settings.sound) return;
-  try {
-    AC = AC || new (window.AudioContext || window.webkitAudioContext)();
-    const notes = kind === "ok" ? [660, 880] : kind === "win" ? [523, 659, 784, 1047] : [220, 175];
-    notes.forEach((f, i) => {
-      const o = AC.createOscillator(), g = AC.createGain(), t = AC.currentTime + i * 0.09;
-      o.type = kind === "no" ? "sawtooth" : "triangle"; o.frequency.value = f;
-      g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.1, t + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.17);
-      o.connect(g).connect(AC.destination); o.start(t); o.stop(t + 0.2);
-    });
-  } catch (e) {}
-}
+function beep(kind) { sfx(kind); }
 async function askNotify() {
   const LN = P.LocalNotifications;
   if (!NATIVE || !LN) return "web";
@@ -223,7 +216,8 @@ const I = {
   scroll: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"><path d="M6 3h11v15a3 3 0 0 1-3 3H5a2 2 0 0 1-2-2v-2h11"/><path d="M9 8h5M9 12h5"/></svg>',
   check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
   code: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5M13.5 4l-3 16"/></svg>',
-  flag: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"><path d="M5 21V4M5 4h12l-2 4 2 4H5"/></svg>'
+  flag: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"><path d="M5 21V4M5 4h12l-2 4 2 4H5"/></svg>',
+  shop: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9h16l-1.2 10.2a2 2 0 0 1-2 1.8H7.2a2 2 0 0 1-2-1.8z"/><path d="M8.5 9V7a3.5 3.5 0 0 1 7 0v2"/><circle cx="12" cy="14.5" r="2.2"/></svg>'
 };
 const hexChip = (color, extra = "") => `<span class="hexsw" style="background:${color}" ${extra}></span>`;
 
@@ -338,12 +332,14 @@ function ring(pct, cls = "") {
 }
 function renderHeader() {
   const s = stats(), st = streak(), tx = todayXP(), g = S.settings.goal;
+  const fz = (S.inv && S.inv.freeze) || 0;
   $("#stats").innerHTML = `
-    <div class="chip" title="Дней подряд">${I.fire}<div><small>Серия</small><b>${st}</b></div></div>
-    <div class="chip" title="Цель дня">${ring(tx / g, "xp")}<div><small>Сегодня</small><b>${tx}<span class="wide">/${g} XP</span></b></div></div>
-    <div class="chip${s.siege.length ? " alert" : ""}">${ring(s.pct / 100)}<div><small>${s.siege.length ? "Осада" : "Господство"}</small><b>${s.siege.length ? s.siege.length + " стр." : s.pct + "%"}</b></div></div>`;
+    <div class="chip" title="Дней подряд${fz ? `, заморозок: ${fz}` : ""}">${I.fire}<div><small>Серия${fz ? ` <span class="fz">❄${fz}</span>` : ""}</small><b>${st}</b></div></div>
+    <button class="chip coinchip" id="coin-chip" data-act="tab" data-tab="shop" title="Монеты — потратить в Лавке">${COIN_SVG}<div><small>Монеты${boostOn() ? " ⚡" : ""}</small><b>${S.coins || 0}</b></div></button>
+    <div class="chip" title="Цель дня">${ring(tx / g, "xp")}<div><small><span class="lbl-w">Сегодня</span><span class="lbl-n">День</span></small><b>${tx}<span class="wide">/${g} XP</span></b></div></div>
+    <div class="chip${s.siege.length ? " alert" : ""}">${ring(s.pct / 100)}<div><small>${s.siege.length ? "Осада" : '<span class="lbl-w">Господство</span><span class="lbl-n">Мир</span>'}</small><b>${s.siege.length ? s.siege.length + " стр." : s.pct + "%"}</b></div></div>`;
   const dueDot = s.siege.length || LANGS.some((_, l) => L_warn(l));
-  $("#tabs").innerHTML = [["map", "Карта", I.map], ["practice", "Практика", I.code], ["review", "Повторение", I.review], ["awards", "Награды", I.awards], ["profile", "Профиль", I.profile]]
+  $("#tabs").innerHTML = [["map", "Карта", I.map], ["practice", "Практика", I.code], ["review", "Повторение", I.review], ["shop", "Лавка", I.shop], ["awards", "Награды", I.awards], ["profile", "Профиль", I.profile]]
     .map(([id, t, ic]) => `<button class="tab" role="tab" data-act="tab" data-tab="${id}" aria-selected="${S.tab === id}">${ic}<span>${t}</span>${id === "review" && dueDot ? '<i class="dot" aria-label="нужно повторить"></i>' : ""}</button>`).join("");
 }
 const L_warn = l => LANGS[l].lessons.some((_, i) => ["warn", "siege"].includes(status(l, i)));
@@ -409,13 +405,13 @@ function caveHTML(l, inSheet) {
   else {
     const cool = ex && ex.failAt && now() - ex.failAt < EXAM_COOLDOWN_MIN * 6e4 ? Math.ceil((EXAM_COOLDOWN_MIN * 6e4 - (now() - ex.failAt)) / 6e4) : 0;
     exam = `<div class="box exam"><h3>Экзамен пещеры</h3><p>${L.exam.length} заданий по всей пещере. Нужно ${Math.ceil(L.exam.length * EXAM_RATE)} правильных ответов — тогда откроется ${k + 1 < T.caves.length ? "следующая пещера" : "сертификат пути"}.</p>
-      <div class="row"><button class="btn pri" data-act="examIntro" data-l="${l}" ${examReady(l) && !cool ? "" : "disabled"}>${cool ? `Пересдача через ${cool} мин` : "Сдать экзамен"}</button>${examReady(l) ? "" : `<span class="note">Сначала пройдите все ${n} залов</span>`}</div></div>`;
+      <div class="row"><button class="btn pri" data-act="examIntro" data-l="${l}" ${examReady(l) && !cool ? "" : "disabled"}>${cool ? `Пересдача через ${cool} мин` : "Сдать экзамен"}</button>${cool && examReady(l) ? `<button class="btn" data-act="retakeNow" data-l="${l}">Сейчас · ${(S.inv && S.inv.retake) ? "есть ⏱️" : coinTag(60)}</button>` : ""}${examReady(l) ? "" : `<span class="note">Сначала пройдите все ${n} залов</span>`}</div></div>`;
   }
   return `<button class="back" data-act="${inSheet ? "track" : "country"}" ${inSheet ? `data-t="${L.track}"` : `data-l="${par}"`}>← ${inSheet ? "Дорожная карта" : esc(LANGS[par].land)}</button>
     <div class="ph">${caveIcon(30)}<div><h2>${esc(L.land)}</h2><p>${esc(T.title)} · шаг ${k + 1} из ${T.caves.length} · ${held} из ${n} залов</p></div></div>
     <div class="bar" role="progressbar" aria-valuenow="${held}" aria-valuemin="0" aria-valuemax="${n}"><i style="width:${held / n * 100}%;background:${L.color}"></i></div>
     <p class="about">${L.about}</p>
-    ${open ? "" : `<div class="box lockbox"><p>🔒 ${lockTxt}</p></div>`}
+    ${premiumLocked(l) ? premiumBox(L.track) : open ? "" : `<div class="box lockbox"><p>🔒 ${lockTxt}</p></div>`}
     <div class="box why"><h3>Почему эта пещера на шаге ${k + 1}</h3><p>${L.why || ""}</p></div>
     <div class="list">${rows}</div>
     ${playLang(L) ? `<div class="box"><h3>Компилятор ${esc(playName(L))}</h3><p>Примеры, которые не требуют фреймворка, можно запускать и менять.</p><div class="row"><button class="btn" data-act="play" data-lang="${playLang(L)}">Открыть компилятор</button></div></div>` : ""}
@@ -440,7 +436,7 @@ function countryHTML(l, inSheet = false) {
   else {
     const cool = ex && ex.failAt && now() - ex.failAt < EXAM_COOLDOWN_MIN * 6e4 ? Math.ceil((EXAM_COOLDOWN_MIN * 6e4 - (now() - ex.failAt)) / 6e4) : 0;
     exam = `<div class="box exam"><h3>Финальный экзамен</h3><p>${L.exam.length} сложных заданий: вывод кода, пропуски, вопросы с подвохом. Нужно ${Math.ceil(L.exam.length * EXAM_RATE)} правильных ответов. За сдачу — сертификат с вашим именем.</p>
-      <div class="row"><button class="btn pri" data-act="examIntro" data-l="${l}" ${examReady(l) && !cool ? "" : "disabled"}>${cool ? `Пересдача через ${cool} мин` : "Сдать экзамен"}</button>${examReady(l) ? "" : `<span class="note">Сначала удержите все ${n} провинций</span>`}</div></div>`;
+      <div class="row"><button class="btn pri" data-act="examIntro" data-l="${l}" ${examReady(l) && !cool ? "" : "disabled"}>${cool ? `Пересдача через ${cool} мин` : "Сдать экзамен"}</button>${cool && examReady(l) ? `<button class="btn" data-act="retakeNow" data-l="${l}">Сейчас · ${(S.inv && S.inv.retake) ? "есть ⏱️" : coinTag(60)}</button>` : ""}${examReady(l) ? "" : `<span class="note">Сначала удержите все ${n} провинций</span>`}</div></div>`;
   }
   return `${inSheet ? "" : `<button class="back" data-act="country" data-l="-1">← Атлас</button>`}
     <div class="ph">${hexChip(L.color)}<div><h2>${esc(L.land)}</h2><p>${esc(L.name)} · ${held} из ${n} провинций</p></div></div>
@@ -543,8 +539,9 @@ let lastKind = null;
 function render() {
   renderHeader();
   const v = $("#view");
-  v.innerHTML = S.tab === "practice" ? viewPractice() : S.tab === "review" ? viewReview() : S.tab === "awards" ? viewAwards() : S.tab === "profile" ? viewProfile() : viewMap();
+  v.innerHTML = S.tab === "practice" ? viewPractice() : S.tab === "review" ? viewReview() : S.tab === "shop" ? viewShop() : S.tab === "awards" ? viewAwards() : S.tab === "profile" ? viewProfile() : viewMap();
   if (S.tab === "map") drawMap();
+  revealAll(v);
 }
 function drawMap() {
   const svg = $("#map"); if (!svg) return;
@@ -564,7 +561,8 @@ function shell(color, eyebrow, title, body) {
   dlg.setAttribute("aria-labelledby", "dt");
 }
 function openOv(focusSel) {
-  if (ov.hidden) { lastFocus = document.activeElement; ov.hidden = false; document.body.style.overflow = "hidden"; }
+  if (ov.hidden) { lastFocus = document.activeElement; ov.hidden = false; document.body.style.overflow = "hidden"; pulse(dlg, "dlg-in"); }
+  revealAll(dlg);
   ov.scrollTop = 0;
   const f = (focusSel && dlg.querySelector(focusSel)) || dlg.querySelector(".db .btn.pri:not(:disabled)") || dlg.querySelector("[data-close]");
   if (f) f.focus({ preventScroll: true });
@@ -663,13 +661,20 @@ function showQ() {
      <div class="kind">${KIND[x.q.t]}</div>
      <p class="q">${x.q.q}</p>
      ${x.q.c ? codeBlock(x.q.c, hlLang(L), false) : ""}
-     ${body}<div id="after"></div>`);
+     ${body}${helpBar(x)}<div id="after"></div>`);
+  if (!ov.hidden) pulse(dlg.querySelector(".db"), "q-in");
   openOv(x.q.t === "mc" ? ".opt" : "#ans");
 }
-function judge(ok, extra) {
+function judge(ok, extra, el) {
   const x = Q.qs[Q.k];
   Q.res.push(ok);
-  if (ok) { Q.xp += Q.mode === "exam" ? 15 : 10; beep("ok"); haptic("ok"); } else { beep("no"); haptic("no"); }
+  if (ok) {
+    const xp = x.revealed ? 0 : Q.mode === "exam" ? 15 : 10;
+    Q.xp += xp; Q.coins = (Q.coins || 0) + (x.revealed ? 0 : Q.mode === "exam" ? 2 : 1);
+    beep("ok"); haptic("ok"); pulse(el, "pop"); confetti(el, 16);
+    if (xp) floatText(el, `+${xp} XP`, "ok");
+  } else { beep("no"); haptic("no"); shake(dlg); pulse(el, "flash"); }
+  const pp = dlg.querySelector(".pips i.cur"); if (pp) { pp.className = ok ? "ok" : "no"; pulse(pp, "pop"); }
   if (Q.mode === "warmup" && ok) { const r = S.topics[tk(x.l, x.i)]; if (r) r.last = now(); }
   const last = Q.k === Q.qs.length - 1;
   $("#after").innerHTML = `<p class="exp"><b style="color:${ok ? "var(--ok)" : "var(--danger)"}">${ok ? "Верно." : "Неверно."}</b> ${x.q.e}${extra || ""}</p>
@@ -680,8 +685,10 @@ function judge(ok, extra) {
 function pick(j) {
   const x = Q.qs[Q.k];
   if (Q.res.length > Q.k) return;
-  dlg.querySelectorAll(".opt").forEach((b, n) => { b.disabled = true; if (x.opts[n].ok) b.classList.add("ok"); else if (n === j) b.classList.add("no"); });
-  judge(x.opts[j].ok);
+  const opts = dlg.querySelectorAll(".opt");
+  opts.forEach((b, n) => { b.disabled = true; if (x.opts[n].ok) b.classList.add("ok"); else if (n === j) b.classList.add("no"); });
+  const hb = dlg.querySelector(".helpbar"); if (hb) hb.remove();
+  judge(x.opts[j].ok, "", opts[j]);
 }
 function submitText() {
   const x = Q.qs[Q.k], inp = $("#ans");
@@ -689,14 +696,15 @@ function submitText() {
   const { ok, note } = checkAnswer(x.q, inp.value);
   inp.classList.add(ok ? "ok" : "no"); inp.readOnly = true;
   const btn = inp.parentElement.querySelector("button"); if (btn) btn.disabled = true;
-  judge(ok, ok ? (note ? `<span class="right">${note}: ${esc(x.q.ans[0])}</span>` : "") : `<span class="right">Правильно: ${esc(x.q.ans[0])}</span>`);
+  const hb = dlg.querySelector(".helpbar"); if (hb) hb.remove();
+  judge(ok, ok ? (note ? `<span class="right">${note}: ${esc(x.q.ans[0])}</span>` : "") : `<span class="right">Правильно: ${esc(x.q.ans[0])}</span>`, inp);
 }
 function next() { if (Q.k === Q.qs.length - 1) finish(); else { Q.k++; showQ(); } }
 
 function finish() {
   const right = Q.res.filter(Boolean).length, total = Q.qs.length;
   const L = LANGS[Q.l], perfect = right === total;
-  let win, msg, need, title, eyebrow = "", extraBtn = "";
+  let win, msg, need, title, eyebrow = "", extraBtn = "", coins = Q.coins || 0;
   const st0 = streak();
   if (Q.mode === "lesson") {
     need = Math.min(LESSON_PASS, total); win = right >= need;
@@ -704,9 +712,9 @@ function finish() {
       const key = tk(Q.l, Q.i), was = S.topics[key];
       const wasSiege = status(Q.l, Q.i) === "siege";
       S.topics[key] = { last: now() };
-      if (!was) { Q.xp += 20; S.counts.lessons++; }
+      if (!was) { Q.xp += 20; S.counts.lessons++; coins += 10; } else coins += 3;
       if (wasSiege) S.counts.lifted++;
-      if (perfect) S.counts.perfect++;
+      if (perfect) { S.counts.perfect++; coins += 5; }
       msg = was ? "Провинция укреплена, защита продлена на 14 дней." : Q.i === 0 ? "Столица захвачена! Над страной поднят флаг." : "Новая провинция ваша.";
       if (Q.i + 1 < L.lessons.length && status(Q.l, Q.i + 1) === "open") extraBtn = `<button class="btn pri big" data-act="learn" data-l="${Q.l}" data-i="${Q.i + 1}">Следующий урок</button>`;
       else if (examReady(Q.l) && !passed(Q.l)) extraBtn = `<button class="btn pri big" data-act="examIntro" data-l="${Q.l}">К финальному экзамену</button>`;
@@ -718,13 +726,13 @@ function finish() {
       let lifted = false;
       L.lessons.forEach((_, i) => { const r = S.topics[tk(Q.l, i)]; if (r) { if (status(Q.l, i) === "siege") lifted = true; r.last = now(); } });
       if (lifted) S.counts.lifted++;
-      S.counts.reviews++; Q.xp += 15;
+      S.counts.reviews++; Q.xp += 15; coins += 8;
       msg = `${esc(L.land)} под защитой ещё ${HOLD} дней.`;
     } else msg = `Нужно ${need} из ${total}. Перечитайте уроки, где были ошибки.`;
     title = win ? "Позиции удержаны" : "Оборона прорвана"; eyebrow = `${esc(L.name)} · повторение`;
   } else if (Q.mode === "warmup") {
     win = right > 0; need = 1;
-    S.warmup = dayKey(now()); S.counts.reviews += right >= 4 ? 1 : 0;
+    S.warmup = dayKey(now()); S.counts.reviews += right >= 4 ? 1 : 0; if (right) coins += 3;
     msg = right ? `${right} ${plural(right, "тема", "темы", "тем")} получили защиту ещё на ${HOLD} дней.` : "Ни одного верного ответа — загляните в уроки и попробуйте снова.";
     title = "Разминка завершена"; eyebrow = "повторение";
   } else {
@@ -733,7 +741,7 @@ function finish() {
     if (win) {
       const date = now(), was = passed(Q.l);
       S.exams[id] = { passed: true, date, score: right, total, cid: certId(id, S.profile.name, date) };
-      Q.xp += 100;
+      Q.xp += 100; if (!was) coins += L.cave ? 75 : 50;
       msg = "Экзамен сдан. Сертификат выписан на ваше имя.";
       extraBtn = `<button class="btn pri big" data-act="cert" data-l="${Q.l}">Открыть сертификат</button>`;
       if (L.cave) {
@@ -743,7 +751,7 @@ function finish() {
           extraBtn = `<button class="btn pri big" data-act="country" data-l="${nx}">В следующую пещеру</button>`;
         } else if (trackDone(L.track)) {
           if (!S.tracks[L.track]) S.tracks[L.track] = { date, cid: certId("T" + L.track, S.profile.name, date) };
-          Q.xp += was ? 0 : 300;
+          Q.xp += was ? 0 : 300; if (!was) coins += 250;
           msg = `«${esc(T.title)}» пройден! Вы готовы откликаться на позицию ${esc(T.role)}. Сертификат выписан на ваше имя.`;
           extraBtn = `<button class="btn pri big" data-act="trackCert" data-t="${L.track}">Сертификат пути</button>`;
         }
@@ -754,6 +762,7 @@ function finish() {
     } else {
       S.exams[id] = { passed: false, failAt: now(), score: right, total };
       msg = `Нужно ${need} из ${total}. Пересдача через ${EXAM_COOLDOWN_MIN} минут — повторите уроки с ошибками.`;
+      extraBtn = `<button class="btn big" data-act="retakeNow" data-l="${Q.l}">Пересдать сейчас · ${(S.inv && S.inv.retake) ? "есть ⏱️" : coinTag(60)}</button>`;
     }
     title = win ? (L.cave && S.tracks[L.track] && !TRACKS[L.track].caves[TRACKS[L.track].caves.indexOf(L.id) + 1] ? "Путь пройден" : "Экзамен сдан") : "Экзамен не сдан"; eyebrow = `${esc(L.name)} · ${L.cave ? "экзамен пещеры" : "финальный экзамен"}`;
   }
@@ -764,9 +773,13 @@ function finish() {
   const cfg = { mode: Q.mode, l: Q.l, i: Q.i };
   shell(Q.mode === "warmup" ? "" : L.color, eyebrow, title,
     `<div class="res"><div class="big" style="color:${win ? "var(--gold)" : "var(--danger)"}">${right} / ${total}</div>
-      <div class="xp-gain">+${Q.xp} XP${st1 > st0 ? ` · серия ${st1} ${plural(st1, "день", "дня", "дней")}` : ""}</div><p>${msg}</p></div>
+      <div class="xp-gain">+${Q.xp} XP${coins ? ` · ${coinTag("+" + (boostOn() ? coins * 2 : coins))}` : ""}${st1 > st0 ? ` · серия ${st1} ${plural(st1, "день", "дня", "дней")}` : ""}</div><p>${msg}</p></div>
      <div class="acts">${win ? "" : `<button class="btn big" data-act="retry">${Q.mode === "exam" ? "К урокам" : "Ещё раз"}</button>`}${extraBtn || `<button class="btn pri big" data-close>На карту</button>`}</div>`);
   Q.retry = cfg;
+  const big = dlg.querySelector(".res .big");
+  if (win) { confetti(big, Q.mode === "exam" ? 140 : 70); pulse(big, "pop"); }
+  else shake(big);
+  if (coins) setTimeout(() => { addCoins(coins, big, "silent"); save(); }, 450);
   if (win && Q.mode !== "warmup") toast(Q.mode === "lesson" ? "Территория расширена" : Q.mode === "exam" ? "Сертификат получен" : "Позиции удержаны");
   openOv();
   if (Q.mode === "lesson" && win) maybeAskReview();
@@ -893,12 +906,12 @@ function openTrack(tid) {
   const T = TRACKS[tid]; if (!T) return;
   const p = IDX[T.parent], P0 = LANGS[p], open = trackOpen(tid), done = trackDone(tid), proj = !!S.projects["track:" + tid];
   const step = (n, cls, title, sub, btn) => `<li class="rm ${cls}"><span class="rm-n">${cls === "done" ? I.check : n}</span><div><b>${title}</b><small>${sub}</small>${btn ? `<div class="row">${btn}</div>` : ""}</div></li>`;
-  const STL = { done: "пройдена", progress: "в процессе", open: "открыта", locked: "закрыта" };
+  const STL = { done: "пройдена", progress: "в процессе", open: "открыта", locked: "закрыта", premium: "👑 PRO" };
   let html = step(0, passed(p) ? "done" : "open", `Страна ${esc(P0.name)}`, passed(p) ? "Финальный экзамен сдан — пещеры открыты" : `Захватите все ${P0.lessons.length} провинций и сдайте финальный экзамен`, passed(p) ? "" : `<button class="btn" data-act="country" data-l="${p}">К стране</button>`);
   trackCaves(tid).forEach((c, k) => {
     const C = LANGS[c], st = caveState(c);
     html += step(k + 1, st, `${esc(C.name)} <span class="pill ${st === "done" ? "ok" : ""}">${STL[st]}${st === "progress" ? ` · ${heldCount(c)}/${C.lessons.length}` : ""}</span>`, `${C.about}<br><span class="why">${C.why || ""}</span>`,
-      st === "locked" ? "" : `<button class="btn ${st === "done" ? "" : "pri"}" data-act="country" data-l="${c}">${st === "done" ? "Открыть" : st === "progress" ? "Продолжить" : "Войти в пещеру"}</button>`);
+      st === "locked" ? "" : st === "premium" ? `<button class="btn" data-act="country" data-l="${c}">Посмотреть</button>` : `<button class="btn ${st === "done" ? "" : "pri"}" data-act="country" data-l="${c}">${st === "done" ? "Открыть" : st === "progress" ? "Продолжить" : "Войти в пещеру"}</button>`);
   });
   const nC = trackCaves(tid).length;
   html += step(nC + 1, proj ? "done" : done ? "open" : "locked", `Проект: ${esc(T.project.title)}`, T.project.desc, `<button class="btn" data-act="trackProject" data-t="${tid}">Требования</button>`);
@@ -907,6 +920,7 @@ function openTrack(tid) {
     `<p class="txt">${T.about}</p>
      <div class="rm-goal">${caveIcon(22)}<div><small>Цель пути</small><b>${esc(T.role)}</b></div><span class="pill ${done ? "ok" : ""}">${trackDoneN(tid)} из ${nC} пещер</span></div>
      ${open ? "" : `<p class="note">🔒 Пещеры откроются после финального экзамена ${esc(P0.name)}. Порядок важен: каждая следующая пещера опирается на предыдущую.</p>`}
+     ${premiumBox(tid)}
      <ol class="roadmap">${html}</ol>
      <p class="note">Вакансии после пути: ${esc(T.jobs)}.</p>`);
   openOv();
@@ -972,7 +986,8 @@ function openPrivacy() {
      <p class="txt">В приложении для iPhone напоминания создаются на устройстве. На сайте, если вы включили напоминания, мы храним адрес push-подписки, часовой пояс, время напоминания, дату ближайшей осады, день последнего занятия и длину серии — чтобы раз в день прислать напоминание.</p>
      <p class="txt">Код на Python, JavaScript, TypeScript и SQL выполняется на устройстве. Код на других языках отправляется на открытые сервисы компиляции (godbolt.org, play.kotlinlang.org, wandbox.org) — не пишите в него личные данные.</p>
      <p class="txt">Если вы подключите профиль LeetCode, приложение отправит ваш никнейм на leetcode.com, чтобы получить публичную статистику решённых задач. Пароль не нужен.</p>
-     <p class="note">Обновлено: 15 октября 2026. Полная версия: alihansagat.github.io/avaland/privacy.html</p>`);
+     <p class="txt">Пути профессий покупаются через Kaspi.kz: мы храним, что куплено, сумму, дату и номер телефона для счёта; номер передаётся в Kaspi через сервис ApiPay.kz. Данные карт мы не получаем. Монеты в игре нельзя купить или обменять на деньги.</p>
+     <p class="note">Обновлено: 18 октября 2026. Полная версия: alihansagat.github.io/avaland/privacy.html</p>`);
   openOv();
 }
 function openCountry(l) {
@@ -994,7 +1009,7 @@ document.addEventListener("click", async e => {
   const b = e.target.closest("[data-act]"); if (!b || b.tagName === "FORM") return;
   const a = b.dataset.act, l = b.dataset.l != null ? +b.dataset.l : null;
   switch (a) {
-    case "tab": S.tab = b.dataset.tab; save(); if (!ov.hidden) closeOv(); render(); window.scrollTo({ top: 0 }); break;
+    case "tab": { const changed = S.tab !== b.dataset.tab; S.tab = b.dataset.tab; save(); if (!ov.hidden) closeOv(); render(); if (changed) { animateView(S.tab); sfx("tap"); haptic("tap"); } window.scrollTo({ top: 0 }); break; }
     case "country": openCountry(l); break;
     case "learn": openLesson(l, +b.dataset.i); break;
     case "startLesson": { const L = LANGS[l], i = +b.dataset.i; startQuiz({ mode: "lesson", l, i, qs: shuffle(L.lessons[i].q).map(q => ({ q, l, i })) }); break; }
@@ -1036,7 +1051,7 @@ document.addEventListener("click", async e => {
     case "onbLang": S.sel = b.dataset.id; save(); document.querySelectorAll(".lchip").forEach(x => x.setAttribute("aria-pressed", x.dataset.id === S.sel)); break;
     case "onbGoal": S.settings.goal = +b.dataset.g; document.querySelectorAll("[data-act=onbGoal]").forEach(x => x.setAttribute("aria-pressed", x === b)); break;
     case "onbDone": onbDone(); break;
-    default: if (!cloudAction(a, b)) practiceAction(a, b);
+    default: if (!shopAction(a, b) && !cloudAction(a, b)) practiceAction(a, b);
   }
 });
 document.addEventListener("submit", e => { if (e.target.matches("form[data-act=text]")) { e.preventDefault(); submitText(); } });
@@ -1117,17 +1132,19 @@ async function onbDone() {
 async function boot() {
   await load();
   const tq = new URLSearchParams(location.search).get("tab");
-  if (["map", "practice", "review", "awards", "profile"].includes(tq)) { S.tab = tq; history.replaceState(null, "", location.pathname + location.hash); }
+  if (["map", "practice", "review", "shop", "awards", "profile"].includes(tq)) { S.tab = tq; history.replaceState(null, "", location.pathname + location.hash); }
   if (NATIVE) {
     try { P.StatusBar && P.StatusBar.setStyle({ style: "DARK" }); } catch (e) {}
     try { P.SplashScreen && P.SplashScreen.hide(); } catch (e) {}
     try { Cap.Plugins.App && Cap.Plugins.App.addListener("appStateChange", st => { if (st.isActive) render(); }); } catch (e) {}
   }
+  applyFreezes();
   render();
   if (!S.onboarded && !/[?&]code=/.test(location.search)) onbStep(0);
   scheduleNotifications();
-  cloudBoot().then(() => { if (ov.hidden) render(); });
+  cloudBoot().then(() => { loadOwned(); if (ov.hidden) render(); });
 }
+/*@SHOP@*/
 /*@PRACTICE@*/
 /*@CLOUD@*/
 if (DEV || window.AVA_SELFTEST) window.__ava = { get S() { return S; }, get Q() { return Q; }, save, render, startQuiz, openLesson, openCert, openCountry, openTrack, openTrackCert, openProblem, runJS, runPY, runSQL, leetFetch, runCode, wrapProgram, openPlay };

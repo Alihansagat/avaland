@@ -23,7 +23,8 @@
         "README: задача, данные, метрики, выводы и как запустить"
       ]
     },
-    "jobs": "Junior ML Engineer, Junior Data Scientist, ML-стажёр"
+    "jobs": "Junior ML Engineer, Junior Data Scientist, ML-стажёр",
+    "price": 4990
   },
   "pyback": {
     "parent": "py",
@@ -47,7 +48,8 @@
         "Docker Compose (API, база, Redis), CI на GitHub Actions и деплой с README"
       ]
     },
-    "jobs": "Junior Python Developer, Junior Backend Developer (Python/FastAPI), стажёр бэкенда"
+    "jobs": "Junior Python Developer, Junior Backend Developer (Python/FastAPI), стажёр бэкенда",
+    "price": 3990
   },
   "fe": {
     "parent": "js",
@@ -71,7 +73,8 @@
         "Деплой на Vercel и README со скриншотами"
       ]
     },
-    "jobs": "Junior Frontend Developer, React Developer, стажёр фронтенда"
+    "jobs": "Junior Frontend Developer, React Developer, стажёр фронтенда",
+    "price": 2990
   },
   "node": {
     "parent": "ts",
@@ -95,7 +98,8 @@
         "Docker Compose и документация Swagger"
       ]
     },
-    "jobs": "Junior Node.js Developer, Junior Backend Developer (TypeScript)"
+    "jobs": "Junior Node.js Developer, Junior Backend Developer (TypeScript)",
+    "price": 2990
   },
   "jvm": {
     "parent": "java",
@@ -119,7 +123,8 @@
         "Docker-образ и README"
       ]
     },
-    "jobs": "Junior Java Developer, Junior Backend Developer (Java/Spring)"
+    "jobs": "Junior Java Developer, Junior Backend Developer (Java/Spring)",
+    "price": 2990
   },
   "android": {
     "parent": "kt",
@@ -143,7 +148,8 @@
         "Сборка APK/AAB и README со скриншотами"
       ]
     },
-    "jobs": "Junior Android Developer, Kotlin Developer"
+    "jobs": "Junior Android Developer, Kotlin Developer",
+    "price": 2990
   },
   "dotnet": {
     "parent": "cs",
@@ -167,7 +173,8 @@
         "Docker и README"
       ]
     },
-    "jobs": "Junior .NET Developer, Junior C# Developer"
+    "jobs": "Junior .NET Developer, Junior C# Developer",
+    "price": 2990
   },
   "cppdev": {
     "parent": "cpp",
@@ -191,7 +198,8 @@
         "README с инструкцией сборки"
       ]
     },
-    "jobs": "Junior C++ Developer, Junior Systems Developer"
+    "jobs": "Junior C++ Developer, Junior Systems Developer",
+    "price": 2990
   },
   "goback": {
     "parent": "go",
@@ -215,7 +223,8 @@
         "Dockerfile и README"
       ]
     },
-    "jobs": "Junior Go Developer, Junior Backend Developer (Go)"
+    "jobs": "Junior Go Developer, Junior Backend Developer (Go)",
+    "price": 2990
   },
   "rustback": {
     "parent": "rs",
@@ -239,7 +248,8 @@
         "Docker-образ и README"
       ]
     },
-    "jobs": "Junior Rust Developer, Backend Developer (Rust)"
+    "jobs": "Junior Rust Developer, Backend Developer (Rust)",
+    "price": 2990
   },
   "ios": {
     "parent": "swift",
@@ -263,7 +273,8 @@
         "TestFlight-сборка и README со скриншотами"
       ]
     },
-    "jobs": "Junior iOS Developer, Swift Developer"
+    "jobs": "Junior iOS Developer, Swift Developer",
+    "price": 2990
   },
   "flutter": {
     "parent": "dart",
@@ -287,7 +298,8 @@
         "Сборка APK и README со скриншотами"
       ]
     },
-    "jobs": "Junior Flutter Developer, Mobile Developer (Flutter)"
+    "jobs": "Junior Flutter Developer, Mobile Developer (Flutter)",
+    "price": 2990
   },
   "laravel": {
     "parent": "php",
@@ -311,7 +323,8 @@
         "Деплой и README"
       ]
     },
-    "jobs": "Junior PHP Developer, Junior Laravel Developer"
+    "jobs": "Junior PHP Developer, Junior Laravel Developer",
+    "price": 2990
   },
   "rails": {
     "parent": "rb",
@@ -335,7 +348,8 @@
         "Деплой Kamal или Render, README"
       ]
     },
-    "jobs": "Junior Ruby on Rails Developer, Junior Ruby Developer"
+    "jobs": "Junior Ruby on Rails Developer, Junior Ruby Developer",
+    "price": 2990
   },
   "analyst": {
     "parent": "sql",
@@ -359,7 +373,8 @@
         "Отчёт: ответ, доказательства, рекомендации"
       ]
     },
-    "jobs": "Junior Data Analyst, Product Analyst, BI-аналитик"
+    "jobs": "Junior Data Analyst, Product Analyst, BI-аналитик",
+    "price": 2990
   },
   "devops": {
     "parent": "base",
@@ -383,6 +398,7 @@
         "Terraform для сервера и README-схема"
       ]
     },
-    "jobs": "Junior DevOps Engineer, Junior SRE, Cloud Engineer (стажёр)"
+    "jobs": "Junior DevOps Engineer, Junior SRE, Cloud Engineer (стажёр)",
+    "price": 2990
   }
 }

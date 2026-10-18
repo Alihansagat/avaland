@@ -128,6 +128,23 @@ cd app && npx cap sync ios
 
 В веб-версии Python-примеры с NumPy, pandas, Matplotlib и scikit-learn запускаются в Pyodide: библиотеки загружаются с CDN Pyodide при первом запуске, графики Matplotlib показываются картинками. PyTorch в браузере не работает — эти уроки помечены как «запустите у себя».
 
+## Монеты, Лавка и платные пути
+
+- Монеты начисляются за учёбу (`addCoins` в `src/shop.js`, правила — `COIN_RULES`). Их тратят в Лавке: заморозка серии, подсказка 50/50, свиток ответа, пересдача без ожидания, двойные монеты, купоны −25% и −50% на пути профессий. За деньги монеты не продаются.
+- Все 15 языков бесплатны. В каждом пути профессий первая пещера бесплатна, остальные — после покупки пути (цены — `price` в `content/tracks.json` и таблица `shop_items` в Supabase; они должны совпадать, списывает сервер).
+- Оплата — Kaspi Pay через сервис ApiPay.kz (у Kaspi нет публичного API). Сервер: `backend/shop.sql` (таблицы) и `backend/functions/kaspi/index.ts` (Edge Function: счёт на номер Kaspi, вебхук с проверкой подписи, выдача доступа). Тесты функции: `cd backend/functions/kaspi/test && deno run --allow-env --allow-read --import-map=import_map.json test.ts`.
+
+### Подключение оплаты (один раз)
+1. ИП (eGov) и Kaspi Pay для бизнеса в приложении Kaspi.kz.
+2. Аккаунт на apipay.kz → подключить кассира Kaspi → взять API-ключ и секрет вебхука.
+3. Supabase → SQL Editor → выполнить `backend/shop.sql`.
+4. Supabase → Edge Functions → новая функция `kaspi` с кодом из `backend/functions/kaspi/index.ts`, проверку JWT выключить (или `supabase functions deploy kaspi --no-verify-jwt`).
+5. Supabase → Edge Functions → Secrets: `APIPAY_API_KEY`, `APIPAY_WEBHOOK_SECRET` (вписывает владелец сам).
+6. В кабинете ApiPay адрес вебхука: `https://wetwpoypjrenlibezsxy.supabase.co/functions/v1/kaspi`.
+7. Проверка в песочнице ApiPay: временно секрет `APIPAY_ALLOW_SANDBOX=1`, после проверки удалить.
+
+Выручка по дням: `select * from revenue_daily;` в SQL Editor.
+
 ## Как добавить задачу практики
 
 Задачи лежат в `practice/p*.py`. Каждая — вызов `prob(...)` с условием, эталонным решением на Python (`py`) и на JavaScript (`js`) и генератором случайных входных данных (`gen`). Скрипт `practice/build_practice.py`:

@@ -63,6 +63,11 @@ function mergeState(a, b) {
   ["drafts", "play", "playIn"].forEach(f => { r[f] = { ...(b[f] || {}), ...(r[f] || {}) }; });
   r.profile = { name: (r.profile && r.profile.name) || (b.profile && b.profile.name) || "", empire: (r.profile && r.profile.empire) || (b.profile && b.profile.empire) || "" };
   r.leet = r.leet || b.leet || null;
+  if ((b.coinsAt || 0) > (r.coinsAt || 0)) { r.coins = b.coins || 0; r.coinsAt = b.coinsAt; r.inv = { ...(b.inv || {}) }; r.boost = b.boost || 0; }
+  r.coupons = { ...(b.coupons || {}), ...(r.coupons || {}) };
+  r.frozen = { ...(b.frozen || {}), ...(r.frozen || {}) };
+  r.owned = { ...(b.owned || {}), ...(r.owned || {}) };
+  r.goalDay = r.goalDay > (b.goalDay || "") ? r.goalDay : b.goalDay || r.goalDay;
   r.onboarded = !!(r.onboarded || b.onboarded);
   r.warmup = r.warmup > (b.warmup || "") ? r.warmup : b.warmup || r.warmup;
   return r;

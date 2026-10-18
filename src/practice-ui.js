@@ -281,7 +281,9 @@ function solved(p, lang) {
     s.solved = now();
     const xp = s.revealed ? Math.round(DIFF[p.diff][2] / 2) : DIFF[p.diff][2];
     addXP(xp);
-    toast(`Задача решена: +${xp} XP`);
+    const cn = s.revealed ? 2 : { easy: 5, medium: 10, hard: 20 }[p.diff] || 5;
+    toast(`Задача решена: +${xp} XP и +${cn} монет`);
+    setTimeout(() => { addCoins(cn, $("[data-act=pSubmit]"), ""); confetti($("#coin-chip"), 40); save(); }, 300);
   }
   checkAch(); save();
   beep("win"); haptic("ok");

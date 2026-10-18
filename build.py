@@ -82,6 +82,7 @@ def main():
     app = (SRC / "app.js").read_text(encoding="utf-8").replace("/*@PRACTICE@*/", (SRC / "practice-ui.js").read_text(encoding="utf-8"))
     app = app.replace("/*@PLAYGROUND@*/", (SRC / "playground.js").read_text(encoding="utf-8"))
     app = app.replace("/*@CLOUD@*/", (SRC / "cloud.js").read_text(encoding="utf-8"))
+    app = app.replace("/*@SHOP@*/", (SRC / "shop.js").read_text(encoding="utf-8"))
 
     # 1) web / artifact build
     dist = ROOT / "dist"; dist.mkdir(exist_ok=True)
